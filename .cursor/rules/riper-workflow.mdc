@@ -1,0 +1,453 @@
+---
+description: workflow of riper
+globs: 
+alwaysApply: false
+---
+# CursorRIPER Framework - TDD-Enhanced RIPER Workflow
+# Version 2.0.0 - Test-Driven Development Integration
+
+## AI PROCESSING INSTRUCTIONS
+This is the **TDD(Test Driven Development)**-enhanced version of the RIPER workflow component. As an AI assistant, you MUST:
+- Load this file when PROJECT_PHASE is "DEVELOPMENT" or "MAINTENANCE"
+- Follow TDD-specific instructions for each RIPER mode
+- Enforce mandatory TDD practices throughout the workflow
+- Always declare your current mode at the beginning of each response
+- Only transition between modes when explicitly commanded
+- Reference TDD checklists and ensure compliance
+- Follow KISS, SOILD,YAGNI rules when design modules
+
+## THE TDD-ENHANCED RIPER-5 MODES
+
+```mermaid
+flowchart LR
+    R[RESEARCH<br/>+TDD Strategy] --> I[INNOVATE<br/>+Test Design]
+    I --> P[PLAN<br/>+TDD Framework]
+    P --> E[EXECUTE<br/>+Red-Green-Refactor]
+    E --> Rev[REVIEW<br/>+TDD Validation]
+    Rev -.-> R
+    
+    style R fill:#e6f3ff,stroke:#0066cc
+    style I fill:#e6ffe6,stroke:#006600
+    style P fill:#fff0e6,stroke:#cc6600
+    style E fill:#ffe6e6,stroke:#cc0000
+    style Rev fill:#f0e6ff,stroke:#6600cc
+```
+
+---
+
+## MODE 1: RESEARCH (TDD-Enhanced)
+[MODE: RESEARCH]
+
+### Core Purpose
+- **Primary**: Information gathering to inform PRD creation or refinement
+- **TDD Focus**: Research testing strategies, frameworks, and patterns relevant to requirements
+- Read `001-dev-docs/index.md` to understand whole context
+
+### TDD Research Responsibilities
+- [ ] **Testing Framework Research**: Investigate testing tools suitable for the tech stack
+- [ ] **Test Strategy Research**: Research industry testing patterns for similar systems
+- [ ] **Performance Testing**: Research performance testing approaches for requirements
+- [ ] **Mock Strategy Research**: Investigate mocking and stubbing patterns
+- [ ] **Test Data Strategy**: Research test data generation and management approaches
+- [ ] **TDD Best Practices**: Research TDD patterns relevant to the domain
+
+### Financial System TDD Research
+- [ ] **Precision Testing**: Research financial calculation testing patterns
+- [ ] **Concurrency Testing**: Research testing approaches for concurrent access
+- [ ] **Data Accuracy Testing**: Research financial data validation testing
+- [ ] **API Testing Patterns**: Research API testing for financial systems
+- [ ] **Security Testing**: Research security testing patterns for financial data
+
+### Permitted Activities
+- Reading files, market research, competitive analysis, understanding user needs
+- Testing framework documentation review
+- TDD pattern research for the specific domain
+- Performance testing strategy investigation
+
+
+### Forbidden Activities
+- Suggestions, implementations, planning, or any hint of action
+- Concrete test writing (defer to EXECUTE mode)
+
+### Output Requirements
+- Begin with [MODE: RESEARCH]
+- ONLY observations, questions, and research findings
+- Include TDD-relevant research findings
+- Document testing strategy options discovered
+
+### Documentation Updates
+- Update `001-dev-docs/00_prd.md` with research findings
+- Update `001-dev-docs/99_session_workbench.md` with TDD research status
+- Record testing strategy options in `001-dev-docs/03_project_bkm.md`
+
+---
+
+## MODE 2: INNOVATE (TDD-Enhanced)
+[MODE: INNOVATE]
+
+### Core Purpose
+- **Primary**: Brainstorming solutions for PRD requirements or technical challenges
+- **TDD Focus**: Design testable solutions and innovative testing approaches
+- - Read `001-dev-docs/index.md` to understand whole context
+
+### TDD Innovation Responsibilities
+- [ ] **Testable Design**: Brainstorm designs that facilitate easy testing
+- [ ] **Test Strategy Innovation**: Innovate testing approaches for complex requirements
+- [ ] **Mock Design**: Design mockable interfaces and dependencies
+- [ ] **Test Pyramid Strategy**: Innovate test distribution across unit/integration/E2E
+- [ ] **TDD Workflow Innovation**: Brainstorm TDD workflow optimizations
+- [ ] **Testing Tool Innovation**: Explore innovative testing tool combinations
+
+### Design for Testability
+- [ ] **Dependency Injection**: Brainstorm DI patterns for testability
+- [ ] **Interface Design**: Design clear interfaces for mocking
+- [ ] **Separation of Concerns**: Design for isolated testing
+- [ ] **Pure Functions**: Maximize pure, easily testable functions
+- [ ] **Error Handling**: Design testable error handling patterns
+- [ ] **State Management**: Design testable state management
+
+### Financial System Test Innovation
+- [ ] **Precision Testing Innovation**: Innovative approaches to financial precision testing
+- [ ] **Data Pipeline Testing**: Innovative testing for data processing pipelines
+- [ ] **Multi-API Testing**: Innovative approaches for multi-source data testing
+- [ ] **Performance Test Innovation**: Creative performance testing strategies
+- [ ] **Security Test Innovation**: Innovative security testing approaches
+
+### Permitted Activities
+- Discussing approaches, trade-offs, creative solutions for PRD objectives
+- Brainstorming testable architecture patterns
+- Designing test strategies and patterns
+- Exploring testing tool combinations
+- Read `001-dev-docs/index.md` to understand whole context
+
+### Forbidden Activities
+- Concrete planning, implementation details, or any code writing
+- Concrete test writing (defer to EXECUTE mode)
+
+### Output Requirements
+- Begin with [MODE: INNOVATE]
+- ONLY possibilities, considerations, and design ideas
+- Include testability considerations in all solutions
+- Present testing strategy innovations
+
+### Documentation Updates
+- Document design alternatives in `001-dev-docs/03_project_bkm.md`
+- Record TDD pattern innovations
+- Update `001-dev-docs/99_session_workbench.md` with innovative approaches
+
+---
+
+## MODE 3: PLAN (TDD-Enhanced)
+[MODE: PLAN]
+
+### Core Purpose
+- **Primary**: Project total designer - create/update PRD, architecture, and work plans
+- **TDD Focus**: Integrate comprehensive TDD planning into all deliverables
+- Read `001-dev-docs/index.md` to understand whole context
+
+### TDD Planning Priority Order
+1. **PRD + Test Strategy**: Create/refine PRD with embedded testing requirements
+2. **Architecture + Test Architecture**: Design architecture with testability built-in
+3. **Work Breakdown + TDD Plans**: Create Stories with complete TDD implementation plans
+4. **Implementation Plans**: Generate TDD-compliant Implementation Plans with Red-Green-Refactor cycles
+
+### TDD-Enhanced Planning Process
+1. **Identify Planning Level**: PRD, Architecture, Work Plan, or Task
+2. **Review Existing Documentation**: Include TDD compliance review
+3. **Create/Update with TDD**: Integrate TDD requirements into all planning
+4. **TDD Checklist Validation**: Run appropriate TDD-enhanced checklists
+5. **Present TDD-Complete Results**: Ensure all deliverables include TDD elements
+
+### PRD Planning (TDD-Enhanced)
+- [ ] **Test Strategy Definition**: Define overall testing strategy for each Epic
+- [ ] **Acceptance Criteria + Tests**: Ensure all AC are testable and test-defined
+- [ ] **Performance Test Requirements**: Include performance testing requirements
+- [ ] **TDD Epic Breakdown**: Structure Epics to support TDD implementation
+- [ ] **Quality Gates Definition**: Define TDD-based quality gates
+
+### Architecture Planning (TDD-Enhanced)
+- [ ] **Test Architecture**: Design comprehensive test architecture
+- [ ] **Testability Patterns**: Integrate testability patterns into system design
+- [ ] **Mock Strategy**: Define system-wide mocking and stubbing strategy
+- [ ] **Test Environment Design**: Design test environment architecture
+- [ ] **CI/CD + Testing**: Integrate testing into deployment pipeline design
+
+### Work Plan Planning (TDD-Enhanced)
+- [ ] **Story TDD Requirements**: Every Story must include TDD implementation plan
+- [ ] **Red-Green-Refactor Plans**: Each Story includes explicit TDD cycle plans
+- [ ] **Test Coverage Targets**: Define test coverage targets for each Story
+- [ ] **TDD Timeline Integration**: Integrate TDD cycles into Story timelines
+- [ ] **Quality Gate Integration**: Integrate TDD quality gates into Story DoD
+
+### Quality Gates (TDD-Enhanced)
+- Use TDD-enhanced checklists:
+  - `prd_review_checklist.md` (includes test strategy validation)
+  - `architecture_review_checklist.md` (includes test architecture validation)
+  - `story_dod_checklist.md` (includes comprehensive TDD validation)
+  - `story_tdd_checklist.md` (dedicated TDD compliance validation)
+
+### Output Requirements
+- Begin with [MODE: PLAN]
+- All planning deliverables must include TDD elements
+- Explicit TDD implementation plans for all Stories
+- TDD-compliant architecture and design decisions
+
+### Documentation Updates
+- Create/update PRD, architecture, or work plan documents with TDD integration
+- Update `001-dev-docs/99_session_workbench.md` with TDD planning status
+- Document TDD-related planning decisions in `001-dev-docs/03_project_bkm.md`
+
+---
+
+## MODE 4: EXECUTE (TDD-Enhanced)
+[MODE: EXECUTE]
+
+### Core Purpose
+- **Primary**: PRD implementation using strict TDD methodology
+- **TDD Focus**: Mandatory Red-Green-Refactor cycle execution
+- - Read `001-dev-docs/index.md` to understand whole context
+
+### MANDATORY TDD EXECUTION PROCESS
+
+#### ENTRY REQUIREMENTS (TDD-Enhanced)
+- [ ] Clear Story selected in `99_session_workbench.md`
+- [ ] Approved TDD Implementation Plan exists
+- [ ] Story requirements trace back to PRD epics
+- [ ] **TDD Checklist Prepared**: `story_tdd_checklist.md` ready for use
+- [ ] **Test Environment Ready**: Testing environment properly configured
+- [ ] **TDD Tools Ready**: All testing tools and frameworks available
+
+#### PHASE 1: RED PHASE (MANDATORY)
+- [ ] **Test First**: NEVER write production code before tests
+- [ ] **Failing Tests**: Write tests that fail for the right reasons
+- [ ] **Test Coverage**: Write tests for all acceptance criteria
+- [ ] **Unit Tests**: Write unit tests for all core logic
+- [ ] **Integration Tests**: Write integration tests for component interactions
+- [ ] **E2E Tests**: Write end-to-end tests for user scenarios
+- [ ] **Performance Tests**: Write performance benchmark tests
+- [ ] **Security Tests**: Write security validation tests (financial systems)
+
+#### PHASE 2: GREEN PHASE (MANDATORY)
+- [ ] **Minimal Implementation**: Write minimum code to pass tests
+- [ ] **Test Passage**: Ensure ALL tests pass
+- [ ] **Regression Check**: Ensure existing tests still pass
+- [ ] **Acceptance Criteria**: Verify AC satisfaction
+- [ ] **No Over-Engineering**: Resist urge to over-implement
+- [ ] **Quick Implementation**: Prioritize speed over elegance
+
+#### PHASE 3: REFACTOR PHASE (MANDATORY)
+- [ ] **Code Quality**: Improve code structure and readability
+- [ ] **Design Patterns**: Apply appropriate design patterns
+- [ ] **Performance**: Optimize for performance requirements
+- [ ] **SOLID Principles**: Ensure SOLID compliance
+- [ ] **DRY Principle**: Eliminate code duplication
+- [ ] **Test Maintenance**: Ensure tests remain passing
+- [ ] **Documentation**: Update inline documentation
+
+### TDD EXECUTION DISCIPLINE
+- [ ] **Never Skip Tests**: NEVER skip test writing phase
+- [ ] **Never Break Cycle**: NEVER break Red-Green-Refactor sequence
+- [ ] **Frequent Commits**: Commit at each Green phase completion
+- [ ] **Test Evidence**: Document test execution evidence
+- [ ] **Coverage Tracking**: Monitor and maintain test coverage
+- [ ] **Continuous Integration**: Ensure CI pipeline validates all tests
+
+### Financial System TDD Requirements
+- [ ] **Precision Testing**: 100% accuracy validation for all calculations
+- [ ] **Concurrency Testing**: Thread-safety validation
+- [ ] **Data Validation**: Comprehensive input/output validation
+- [ ] **Performance Testing**: Sub-2-second response time validation
+- [ ] **Security Testing**: Financial data security validation
+- [ ] **API Testing**: Comprehensive API contract testing
+
+### Output Requirements
+- Begin with [MODE: EXECUTE]
+- Document current TDD phase (Red/Green/Refactor)
+- Show test execution results
+- Demonstrate TDD compliance
+
+### Progress Tracking (TDD-Enhanced)
+- Update Story TDD status in `02_work_plan_progress.md`
+- Track TDD cycles in `99_session_workbench.md`
+- Document TDD implementation decisions in `03_project_bkm.md`
+- Record TDD cycle statistics and learnings
+
+### Forbidden Activities
+- Writing production code before tests (RED phase violation)
+- Skipping refactor phase
+- Breaking existing tests
+- Implementing features not covered by tests
+
+---
+
+## MODE 5: REVIEW (TDD-Enhanced)
+[MODE: REVIEW]
+
+### Core Purpose
+- **Primary**: PRD requirements validator and TDD compliance auditor
+- **TDD Focus**: Comprehensive TDD validation using enhanced checklists
+- - Read `001-dev-docs/index.md` to understand whole context
+
+### TDD REVIEW LEVELS
+
+#### 1. Story TDD Review (MANDATORY)
+- [ ] **TDD Compliance**: Use `story_tdd_checklist.md` systematically
+- [ ] **Red-Green-Refactor Validation**: Verify complete TDD cycle execution
+- [ ] **Test Coverage Validation**: Verify coverage meets targets (≥80%)
+- [ ] **Test Quality Assessment**: Evaluate test code quality and maintainability
+- [ ] **TDD Documentation**: Verify TDD process documentation completeness
+
+#### 2. Story DoD Review (Enhanced)
+- [ ] **DoD Compliance**: Use enhanced `story_dod_checklist.md`
+- [ ] **Acceptance Criteria**: Verify AC satisfaction through tests
+- [ ] **Quality Gates**: Verify all TDD quality gates passed
+- [ ] **Performance Validation**: Verify performance test passage
+- [ ] **Security Validation**: Verify security test passage
+
+#### 3. Architecture TDD Review
+- [ ] **Test Architecture**: Validate test architecture implementation
+- [ ] **Testability**: Verify architecture supports testing
+- [ ] **Mock Strategy**: Validate mocking strategy implementation
+- [ ] **Test Environment**: Verify test environment compliance
+
+#### 4. PRD TDD Review
+- [ ] **Test Strategy**: Validate test strategy implementation
+- [ ] **TDD Requirements**: Verify TDD requirements satisfaction
+- [ ] **Quality Metrics**: Verify quality metrics achievement
+
+### TDD REVIEW PROCESS
+1. **Select Review Level**: Determine which TDD review level(s) to execute
+2. **Execute TDD Checklists**: Systematically execute relevant TDD checklists
+3. **Validate TDD Evidence**: Review TDD execution evidence and documentation
+4. **Quality Gate Assessment**: Determine if TDD quality gates are met
+5. **Generate TDD Report**: Document TDD compliance findings
+6. **Make Gate Decision**: Approve, conditionally approve, or reject based on TDD compliance
+
+### TDD QUALITY GATES (5-Dimensional)
+- [ ] **Code Quality**: Code quality evaluation ≥80% (includes TDD compliance)
+- [ ] **Test Coverage**: Test coverage validation ≥80%
+- [ ] **Performance**: Performance test validation ≥80%
+- [ ] **Security**: Security test validation ≥80%
+- [ ] **Acceptance**: User acceptance test validation ≥80%
+
+### Financial System TDD Validation
+- [ ] **Calculation Accuracy**: 100% financial calculation test coverage
+- [ ] **Data Integrity**: Complete data validation test coverage
+- [ ] **Concurrency Safety**: Thread-safety test validation
+- [ ] **API Compliance**: Complete API contract test validation
+- [ ] **Performance Compliance**: <2s response time test validation
+
+### Output Requirements
+- Begin with [MODE: REVIEW]
+- Execute checklists systematically and publicly
+- Provide clear pass/fail decisions
+- Document TDD compliance evidence
+- Generate comprehensive review reports
+
+### Documentation Updates (TDD-Enhanced)
+- Record TDD review findings in `03_project_bkm.md`
+- Update Story TDD status in `02_work_plan_progress.md`
+- Document TDD patterns and lessons learned
+- Record quality metrics and trends
+
+---
+
+## TDD-ENHANCED WORKFLOW DIAGRAMS
+
+### TDD-Enhanced EXECUTE Mode Workflow
+```mermaid
+flowchart TD
+    Start[EXECUTE Mode Entry] --> CheckTDD[Verify TDD Prerequisites]
+    CheckTDD --> RedPhase[RED PHASE: Write Failing Tests]
+    RedPhase --> TestFail{Tests Fail Correctly?}
+    TestFail -->|No| FixTests[Fix Test Issues]
+    FixTests --> RedPhase
+    TestFail -->|Yes| GreenPhase[GREEN PHASE: Minimal Implementation]
+    GreenPhase --> TestPass{All Tests Pass?}
+    TestPass -->|No| FixCode[Fix Implementation]
+    FixCode --> GreenPhase
+    TestPass -->|Yes| RefactorPhase[REFACTOR PHASE: Improve Code]
+    RefactorPhase --> TestStillPass{Tests Still Pass?}
+    TestStillPass -->|No| FixRefactor[Fix Refactor Issues]
+    FixRefactor --> RefactorPhase
+    TestStillPass -->|Yes| Complete[Cycle Complete]
+    Complete --> MoreFeatures{More Features?}
+    MoreFeatures -->|Yes| RedPhase
+    MoreFeatures -->|No| StoryComplete[Story Complete]
+```
+
+### TDD-Enhanced REVIEW Mode Workflow
+```mermaid
+flowchart TD
+    Start[REVIEW Mode Entry] --> SelectLevel{Review Level?}
+    SelectLevel -->|Story| TDDChecklist[Execute story_tdd_checklist.md]
+    SelectLevel -->|DoD| DODChecklist[Execute story_dod_checklist.md]
+    SelectLevel -->|Architecture| ArchChecklist[Execute architecture_review_checklist.md]
+    SelectLevel -->|PRD| PRDChecklist[Execute prd_review_checklist.md]
+    
+    TDDChecklist --> ValidateTDD[Validate TDD Evidence]
+    DODChecklist --> ValidateDoD[Validate DoD Compliance]
+    ArchChecklist --> ValidateArch[Validate Architecture]
+    PRDChecklist --> ValidatePRD[Validate PRD Quality]
+    
+    ValidateTDD --> QualityGate[5-Dimensional Quality Gate]
+    ValidateDoD --> QualityGate
+    ValidateArch --> QualityGate
+    ValidatePRD --> QualityGate
+    
+    QualityGate --> Decision{Gate Decision}
+    Decision -->|Pass| Approve[Approve and Document]
+    Decision -->|Conditional| ConditionalApprove[Conditional Approval]
+    Decision -->|Fail| Reject[Reject and Document Issues]
+```
+
+---
+
+## TDD DOCUMENTATION REQUIREMENTS
+
+### All Modes Must Update
+- `99_session_workbench.md`: Current TDD status and phase
+- `02_work_plan_progress.md`: TDD progress tracking
+- `03_project_bkm.md`: TDD decisions and lessons learned
+
+### TDD-Specific Documentation
+- TDD cycle statistics and metrics
+- Test coverage reports and trends
+- TDD pattern usage and effectiveness
+- TDD-related technical debt identification
+- TDD process improvements and lessons
+
+---
+
+## TDD TRANSITION REQUIREMENTS
+
+### Mode Entry Requirements
+- **RESEARCH**: No TDD prerequisites
+- **INNOVATE**: Should have TDD research context
+- **PLAN**: Should have TDD innovation ideas
+- **EXECUTE**: MANDATORY TDD Implementation Plan
+- **REVIEW**: MANDATORY TDD execution evidence
+
+### Mode Exit Requirements
+- **RESEARCH**: TDD strategy options documented
+- **INNOVATE**: TDD design patterns documented
+- **PLAN**: Complete TDD Implementation Plans
+- **EXECUTE**: Complete TDD cycles with evidence
+- **REVIEW**: TDD compliance verdict and documentation
+
+---
+
+## CONTEXT AWARENESS (TDD-Enhanced)
+
+The AI should maintain TDD-aware context of:
+1. Current TDD phase (Red/Green/Refactor) from `99_session_workbench.md`
+2. TDD requirements from `001-dev-docs/00_prd.md`
+3. Test architecture from `001-dev-docs/01_architecture.md`
+4. TDD progress from `001-dev-docs/02_work_plan_progress.md`
+5. TDD decisions from `001-dev-docs/03_project_bkm.md`
+6. TDD checklist compliance status
+
+---
+
+*This TDD-enhanced RIPER workflow ensures that Test-Driven Development is not just followed but is integral to every aspect of the development process, from research through review.*
+
