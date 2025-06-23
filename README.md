@@ -89,7 +89,7 @@ docker volume create neo4j_data
 docker run -d --name neo4j-community \
   -p 7474:7474 -p 7687:7687 \
   -v neo4j_data:/data \
-  -e NEO4J_AUTH=neo4j/CodeLearner2024 \
+  -e NEO4J_AUTH=neo4j/<your password> \
   neo4j:5.26-community
 
 # 访问Web界面

@@ -56,7 +56,7 @@ docker run -d \
     -p 7474:7474 -p 7687:7687 \
     -v neo4j_data:/data \
     -v neo4j_logs:/logs \
-    -e NEO4J_AUTH=neo4j/CodeLearner2024 \
+    -e NEO4J_AUTH=neo4j/<your password> \
     -e NEO4J_ACCEPT_LICENSE_AGREEMENT=yes \
     neo4j:5.26-community
 
@@ -89,7 +89,7 @@ print('✅ Chroma安装成功，版本:', chromadb.__version__)
 python -c "
 from neo4j import GraphDatabase
 try:
-    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', 'CodeLearner2024'))
+    driver = GraphDatabase.driver('bolt://localhost:7687', auth=('neo4j', '<your password>'))
     driver.verify_connectivity()
     print('✅ Neo4j连接成功')
     driver.close()
@@ -125,7 +125,7 @@ app:
 neo4j:
   uri: "bolt://localhost:7687"
   user: "neo4j"
-  password: "CodeLearner2024"
+  password: "<your pass word here>"
   database: "neo4j"
 
 # Chroma向量数据库配置

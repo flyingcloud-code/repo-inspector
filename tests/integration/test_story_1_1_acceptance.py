@@ -7,7 +7,7 @@ import tempfile
 import yaml
 from pathlib import Path
 
-from src.code_learner import setup_environment, ConfigManager, get_logger
+from src.code_learner import setup_environment, ConfigManager, Config, get_logger
 
 
 class TestStory11Acceptance:
@@ -135,10 +135,12 @@ class TestStory11Acceptance:
     
     def test_acceptance_5_config_manager(self):
         """验收标准5: ConfigManager能加载和验证配置"""
-        # 重置单例状态
+        import os
+        from unittest.mock import patch
+        
+        # 测试1: 验证ConfigManager基本功能
         ConfigManager._instance = None
         ConfigManager._config = None
-        manager = ConfigManager()
         
         # 创建测试配置
         test_config = {
@@ -180,10 +182,24 @@ class TestStory11Acceptance:
             temp_path = f.name
         
         try:
+            # 测试配置文件加载和环境变量覆盖（这是正确行为）
+            manager = ConfigManager()
             config = manager.load_config(Path(temp_path))
             
-            # 验证配置加载成功
-            assert config.database.neo4j_uri == 'bolt://test:7687'
+            # 验证配置对象创建成功
+            assert isinstance(config, Config)
+            
+            # 验证配置文件中的值被正确加载（除非被环境变量覆盖）
+            # 注意：如果系统环境变量存在，它们会覆盖配置文件的值
+            current_neo4j_uri = os.environ.get('NEO4J_URI')
+            if current_neo4j_uri:
+                # 环境变量存在，应该使用环境变量的值
+                assert config.database.neo4j_uri == current_neo4j_uri
+            else:
+                # 环境变量不存在，应该使用配置文件的值
+                assert config.database.neo4j_uri == 'bolt://test:7687'
+            
+            # 测试没有环境变量覆盖的配置项
             assert config.llm.embedding_model_name == 'test-model'
             assert config.parser.tree_sitter_language == 'c'
             assert config.logging.level == 'INFO'
@@ -191,6 +207,43 @@ class TestStory11Acceptance:
             
             # 验证目录自动创建
             assert Path(config.app.data_dir).exists()
+            
+            # 测试2: 验证环境变量优先级
+            ConfigManager._instance = None
+            ConfigManager._config = None
+            
+            with patch.dict('os.environ', {
+                'NEO4J_URI': 'bolt://override:7687',
+                'OPENROUTER_API_KEY': 'override-api-key'
+            }, clear=False):  # clear=False保持现有环境变量
+                manager = ConfigManager()
+                config = manager.load_config(Path(temp_path))
+                
+                # 验证环境变量覆盖了配置文件
+                assert config.database.neo4j_uri == 'bolt://override:7687'
+                assert config.llm.chat_api_key == 'override-api-key'
+                # 其他值应该保持配置文件中的值
+                assert config.llm.embedding_model_name == 'test-model'
+                assert config.app.name == 'Test App'
+            
+            # 测试3: 验证实际生产环境配置加载
+            ConfigManager._instance = None
+            ConfigManager._config = None
+            
+            manager = ConfigManager()
+            config = manager.get_config()  # 使用默认配置路径
+            
+            # 验证能成功加载配置
+            assert isinstance(config, Config)
+            # 验证从.env文件或环境变量加载的API Key
+            assert config.llm.chat_api_key  # 应该有API Key
+            assert config.database.neo4j_uri  # 应该有数据库URI
+            # 验证配置的基本结构
+            assert hasattr(config, 'database')
+            assert hasattr(config, 'llm') 
+            assert hasattr(config, 'parser')
+            assert hasattr(config, 'logging')
+            assert hasattr(config, 'app')
             
         finally:
             Path(temp_path).unlink()

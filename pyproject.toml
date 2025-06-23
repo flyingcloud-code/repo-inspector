@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-repo-learner"
+version = "0.1.0"
+description = "C语言智能代码分析调试工具"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "Code Repo Learner Team"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "pyyaml>=6.0",
+    "tree-sitter==0.21.3",
+    "tree-sitter-c==0.21.3",
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0",
+    "neo4j>=5.0.0",
+    "click>=8.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "black>=23.0.0",
+]
+
+[project.scripts]
+code-learner = "code_learner.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"] 
+
+[dependency-groups]
+dev = [
+    "flake8>=7.3.0",
+    "mypy>=1.16.1",
+    "pytest>=8.4.1",
+]
