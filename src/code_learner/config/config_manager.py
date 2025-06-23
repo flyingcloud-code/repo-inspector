@@ -22,7 +22,7 @@ class DatabaseConfig:
     """数据库配置"""
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
-    neo4j_password: str = "<your password>"
+    neo4j_password: str = ""  # 必须通过环境变量 NEO4J_PASSWORD 提供
     neo4j_database: str = "neo4j"
     sqlite_path: str = "./data/metadata.db"
 
@@ -186,13 +186,14 @@ class ConfigManager:
             'OPENROUTER_MODEL': ['llm', 'chat', 'model'],
             'LOG_LEVEL': ['logging', 'level'],
             'DEBUG': ['app', 'debug'],
+            'VERBOSE': ['app', 'verbose'],
         }
 
         for env_var, config_path in env_mappings.items():
             env_value = os.getenv(env_var)
             if env_value is not None:
                 # 处理布尔值
-                if env_var == 'DEBUG':
+                if env_var in ('DEBUG', 'VERBOSE'):
                     env_value = env_value.lower() in ('true', '1', 'yes', 'on')
 
                 # 设置配置值

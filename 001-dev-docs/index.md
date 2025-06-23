@@ -106,8 +106,8 @@
 ### 🤖 CursorRIPER框架状态
 - **当前阶段:** DEVELOPMENT (START阶段已完成)
 - **当前模式:** EXECUTE 
-- **已完成Story:** Epic 1, Story 1.1 ✅, Story 1.2 ✅
-- **下一个Story:** Epic 1, Story 1.3 (Neo4j图数据库存储)
+- **已完成Story:** Epic 1, Story 1.1 ✅, Story 1.2 ✅, Story 1.3 ✅
+- **下一个Story:** Epic 1, Story 1.4 (向量嵌入与问答)
 
 ### 📖 AI上下文加载顺序
 1. **核心文档:** 按数字顺序读取 (00 → 01 → 02 → 03)
@@ -200,16 +200,136 @@ flowchart TD
 ### 📊 Epic 1 进度
 - **Story 1.1:** ✅ 完成 (基础环境搭建与配置系统)
 - **Story 1.2:** ✅ 完成 (Tree-sitter C语言解析器实现)
-- **Story 1.3:** 🔄 下一步 (Neo4j图数据库存储)
-- **Story 1.4:** 📅 计划中 (向量嵌入与问答)
+- **Story 1.3:** ✅ 完成 (Neo4j图数据库存储)
+- **Story 1.4:** 🔄 下一步 (向量嵌入与问答)
 
 ### 🔧 技术栈验证状态
 - ✅ **Python 3.11.12 + uv环境:** 完全配置
 - ✅ **Tree-sitter 0.21.3 + tree-sitter-c 0.21.3:** API兼容性解决
 - ✅ **配置管理系统:** ConfigManager单例模式实现
 - ✅ **数据模型和接口:** 完整的SOLID架构
-- 🔄 **Neo4j图数据库:** 准备集成
-- 📅 **Chroma向量数据库:** 待实现
+- ✅ **Neo4j图数据库:** 完整集成，严格模式运行
+- 🔄 **Chroma向量数据库:** 准备集成
 - 📅 **OpenRouter API:** 待集成
+
+## Neo4j图数据库使用指南
+
+### 🚀 快速启动Neo4j
+
+**1. 启动Neo4j容器:**
+```bash
+docker run -d \
+    --name neo4j-community \
+    --restart always \
+    -p 7474:7474 -p 7687:7687 \
+    -v neo4j_data:/data \
+    -v neo4j_logs:/logs \
+    -e NEO4J_AUTH=neo4j/your_password \
+    neo4j:5.26-community
+```
+
+**2. 配置环境变量:**
+```bash
+# .env文件
+NEO4J_PASSWORD=your_password
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+VERBOSE=true  # 开启详细日志
+```
+
+### 🧪 测试Neo4j集成
+
+**运行验收测试:**
+```bash
+# 基本测试
+python -m pytest tests/integration/test_story_1_3_acceptance.py -v
+
+# 详细日志模式  
+VERBOSE=true python -m pytest tests/integration/test_story_1_3_acceptance.py -v -s
+```
+
+**测试覆盖:**
+- ✅ Neo4j连接和基本操作
+- ✅ 存储File和Function节点
+- ✅ 创建CONTAINS关系
+- ✅ 端到端真实C文件测试
+
+### 🔍 Neo4j Web界面使用
+
+**访问界面:**
+- URL: http://localhost:7474
+- 登录: neo4j / your_password
+
+**常用查询示例:**
+```cypher
+// 查看所有节点和关系
+MATCH (n) RETURN n LIMIT 25
+
+// 查看文件包含的函数
+MATCH (f:File)-[:CONTAINS]->(fn:Function) 
+RETURN f.name, fn.name, fn.start_line, fn.end_line
+
+// 统计节点数量
+MATCH (n) RETURN labels(n) as type, count(n) as count
+
+// 查找特定函数
+MATCH (fn:Function {name: "main"}) 
+RETURN fn.name, fn.code, fn.start_line, fn.file_path
+
+// 查看文件的所有函数
+MATCH (f:File {name: "hello.c"})-[:CONTAINS]->(fn:Function)
+RETURN fn.name, fn.start_line ORDER BY fn.start_line
+```
+
+### ⚠️ 故障排除
+
+**常见问题:**
+
+1. **连接失败 - StorageError: connection_unavailable**
+   ```bash
+   # 检查Neo4j容器状态
+   docker ps | grep neo4j
+   docker logs neo4j-community
+   
+   # 重启容器
+   docker restart neo4j-community
+   ```
+
+2. **认证失败 - StorageError: authentication_failed**  
+   ```bash
+   # 检查环境变量
+   echo $NEO4J_PASSWORD
+   
+   # 重置密码
+   docker exec neo4j-community neo4j-admin dbms set-initial-password new_password
+   ```
+
+3. **事务失败 - StorageError: transaction_execution**
+   ```bash
+   # 开启verbose模式查看详细错误
+   VERBOSE=true python your_script.py
+   
+   # 清空数据库重新开始
+   # 在Neo4j Browser中执行: MATCH (n) DETACH DELETE n
+   ```
+
+### 📊 性能特性
+
+**连接池配置:**
+- 最大连接数: 50
+- 连接超时: 60秒
+- 自动重连: 支持
+
+**批量操作:**
+- 使用UNWIND批量创建节点
+- 事务安全保证数据一致性
+- 支持大文件和多函数处理
+
+**严格模式特性:**
+- 无Fallback机制 - 所有错误抛出异常
+- 详细日志记录 - VERBOSE模式完整跟踪
+- 事务验证 - 操作完成度检查
+
+---
 
 *这个索引文档帮助AI助手和用户快速导航项目文档，理解项目当前状态和下一步行动。* 

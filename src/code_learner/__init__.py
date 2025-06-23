@@ -10,7 +10,7 @@ __email__ = "team@codelearner.dev"
 # 核心组件导入
 from .config.config_manager import ConfigManager, Config
 from .core.data_models import Function, FileInfo, ParsedCode, EmbeddingData, QueryResult
-from .core.interfaces import IParser, IGraphStore, IVectorStore, IEmbeddingEngine, IChatBot
+from .core.interfaces import IParser, IGraphStore, IVectorStore, IEmbeddingEngine, IChatBot, ICodeQAService
 from .core.exceptions import (
     CodeLearnerError, ParseError, DatabaseConnectionError,
     ConfigurationError, ModelLoadError, EmbeddingError, QueryError, APIError
@@ -45,7 +45,7 @@ __all__ = [
     'Function', 'FileInfo', 'ParsedCode', 'EmbeddingData', 'QueryResult',
 
     # 接口定义
-    'IParser', 'IGraphStore', 'IVectorStore', 'IEmbeddingEngine', 'IChatBot',
+    'IParser', 'IGraphStore', 'IVectorStore', 'IEmbeddingEngine', 'IChatBot', 'ICodeQAService',
 
     # 异常类
     'CodeLearnerError', 'ParseError', 'DatabaseConnectionError',

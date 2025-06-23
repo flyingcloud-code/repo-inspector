@@ -94,6 +94,79 @@
 - 完全本地化，无外部依赖（除API调用）
 - 更好的开发体验和调试环境
 
+### TDR-002: Story 1.4设计原则平衡 (2025-06-23)
+
+**决策：** 恢复完整的三接口架构，支持repo级别扩展和用户明确需求
+
+**背景：** 初始设计评审中过度简化了Story 1.4，忽略了关键需求：
+1. 用户明确需要`generate_summary()`功能
+2. POC目标是OpenSBI项目(289文件)，不是单文件
+3. 用户要求真实API测试，无mock，无fallback
+
+**设计纠正过程：**
+
+#### 错误的简化设计 (已纠正)
+```python
+# ❌ 过度简化 - 违背用户需求
+class CodeQAService:  # 单一类统一处理
+    def initialize() -> bool
+    def embed_and_store_code() -> bool  
+    def ask_question() -> str  # 缺少generate_summary
+```
+
+**问题分析：**
+- 违背用户明确需求：缺少`generate_summary()`
+- 违背扩展性要求：无法支持repo级别289文件处理
+- 违背测试要求：简化了真实API测试复杂度
+
+#### 正确的平衡设计 (最终版本)
+```python
+# ✅ 平衡设计 - 满足所有需求
+class IVectorStore(ABC):     # 支持repo级别多集合管理
+    def create_collection() -> bool
+    def add_embeddings() -> bool      # 批量处理
+    def search_similar() -> List
+    def delete_collection() -> bool
+
+class IEmbeddingEngine(ABC): # 支持repo级别批量优化
+    def load_model() -> bool
+    def encode_text() -> Vector
+    def encode_batch() -> List        # repo级别必需
+    def encode_function() -> EmbeddingData
+
+class IChatBot(ABC):         # 支持用户明确需求
+    def initialize() -> bool
+    def ask_question() -> QueryResult
+    def generate_summary() -> str     # 用户明确需要
+```
+
+**设计原则重新平衡：**
+- **KISS**: 保持接口简单，但不丢失必要功能
+- **YAGNI**: 不过度设计，但为明确需求预留接口
+- **TDD**: 真实API测试，repo级别验证
+- **可扩展性**: 明确支持289文件处理目标
+
+**实施决策：**
+1. **完整接口**: 恢复三个核心接口的完整功能
+2. **批量处理**: `encode_batch()`支持repo级别289文件
+3. **持久化存储**: Chroma PersistentClient替代内存模式
+4. **真实测试**: 所有组件使用真实API，验证OpenSBI项目处理能力
+5. **用户功能**: 确保`generate_summary()`功能完整实现
+
+**经验教训：**
+- **需求确认优先**: 用户明确需求不能因设计原则而忽略
+- **目标规模重要**: POC的"P"不等于功能简化，而是快速验证
+- **平衡胜过极端**: 设计原则需要平衡应用，不能单一原则主导
+- **真实测试价值**: 用户强调的"无mock"体现了对质量的高要求
+
+**后果：**
+- 设计复杂度适度增加，但满足所有明确需求
+- 实施工作量增加，但为repo级别扩展奠定基础
+- 测试复杂度提高，但验证真实场景可行性
+- 为Epic 2和后续开发提供坚实的架构基础
+
+---
+
 ### 核心技术选择
 
 #### Tree-sitter for C语言解析

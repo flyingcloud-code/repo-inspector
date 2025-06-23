@@ -25,6 +25,14 @@ class DatabaseConnectionError(CodeLearnerError):
         super().__init__(f"{database_type} connection error: {message}")
 
 
+class StorageError(CodeLearnerError):
+    """存储操作异常"""
+    def __init__(self, operation: str, message: str):
+        self.operation = operation
+        self.message = message
+        super().__init__(f"Storage error during '{operation}': {message}")
+
+
 class ConfigurationError(CodeLearnerError):
     """配置异常"""
     def __init__(self, config_key: str, message: str):
