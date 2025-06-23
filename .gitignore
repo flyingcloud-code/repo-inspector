@@ -202,4 +202,6 @@ frontend/.next/
 logs/*
 *.log
 .venv/
-reference_code_repo/
+reference_code_repo/*
+.cursor/
+uv.lock
