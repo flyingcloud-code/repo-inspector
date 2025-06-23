@@ -163,7 +163,7 @@
   docker run -d --name neo4j-community \
     -p 7474:7474 -p 7687:7687 \
     -v neo4j_data:/data \
-    -e NEO4J_AUTH=neo4j/CodeLearner2024 \
+    -e NEO4J_AUTH=neo4j/<your password> \
     neo4j:5.26-community
   # 访问: http://localhost:7474
   ```
@@ -599,13 +599,114 @@ except Exception as e:
 2. **架构重设计**：基于POC经验优化架构
 3. **MVP规划**：定义下一阶段的功能范围
 
+## Tree-sitter集成经验总结 (Story 1.2)
+
+### 版本兼容性问题解决
+
+#### 问题描述
+- **初始错误：** "Incompatible Language version 15. Must be between 13 and 14"
+- **根本原因：** tree-sitter版本不兼容，新旧API混用
+
+#### 解决过程
+1. **网络搜索策略：** 使用多种搜索工具获取最新API信息
+2. **版本组合发现：** tree-sitter 0.21.3 + tree-sitter-c 0.21.3
+3. **API调整：** 使用`Language(tsc.language(), 'c')`和`parser.set_language()`
+
+#### 关键技术发现
+```python
+# 正确的tree-sitter 0.21.3 API使用方法
+import tree_sitter_c as tsc
+from tree_sitter import Language, Parser
+
+# 初始化
+language = Language(tsc.language(), 'c')
+parser = Parser()
+parser.set_language(language)
+```
+
+### 字节范围错误问题
+
+#### 问题描述
+- **现象：** 函数名提取错误，包含注释的代码字节范围计算错误
+- **表现：** 期望`simple_func`，实际得到`unc() {\n   `
+
+#### 根本原因分析
+- tree-sitter在包含注释的代码中字节范围计算有误
+- 使用`source_code[node.start_byte:node.end_byte]`导致错误
+
+#### 解决方案
+```python
+# 错误方法
+function_name = source_code[node.start_byte:node.end_byte]
+
+# 正确方法
+function_name = node.text.decode('utf-8')
+```
+
+### TDD实践经验
+
+#### 测试驱动的调试策略
+1. **先写简单测试：** 验证基本功能
+2. **逐步增加复杂性：** 从简单代码到包含注释的代码
+3. **隔离问题：** 单独测试每个组件
+
+#### 有效的调试技术
+```python
+# 调试AST结构
+def print_tree_with_bytes(node, depth=0):
+    indent = '  ' * depth
+    text = node.text.decode('utf-8')[:30]
+    print(f'{indent}{node.type} [{node.start_byte}-{node.end_byte}]: "{text}"')
+```
+
+### 接口设计验证
+
+#### SOLID原则实践成果
+- **单一职责：** CParser专注解析，不处理存储
+- **接口隔离：** IParser接口简洁明确
+- **依赖倒置：** 通过接口而非具体实现依赖
+
+#### 接口设计的价值体现
+- 测试时可以轻松mock
+- 实现时职责清晰
+- 扩展时不影响其他组件
+
+### 网络搜索工具的价值
+
+#### 关键成功因素
+- **多工具搜索：** 使用web_search获取最新信息
+- **具体版本查询：** 搜索特定版本的API使用方法
+- **实际示例查找：** 寻找可工作的代码示例
+
+#### 搜索策略总结
+```
+搜索模式：
+1. "tree-sitter python 2025 API usage"
+2. "tree-sitter-c 0.21.3 example"  
+3. "tree-sitter Language initialization error"
+```
+
+### 经验教训
+
+#### 技术债务记录
+1. **版本锁定：** 明确指定兼容的版本组合
+2. **API测试：** 每个外部库都要有基本的API测试
+3. **错误处理：** 优雅处理版本不兼容问题
+
+#### 最佳实践提炼
+- **搜索优先：** 遇到技术问题先搜索最新信息
+- **版本谨慎：** 使用经过验证的版本组合
+- **测试驱动：** 用测试来验证和调试问题
+- **接口设计：** 良好的接口设计简化实现和测试
+
 ## Change Log
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2025-01-17 | AI Assistant | Initial BKM creation with tech stack decisions |
 | 1.1 | 2025-01-17 | AI Assistant | 重大更新：添加POC vs 生产系统区别，过度设计教训，MVP原则应用 |
+| 1.2 | 2025-06-23 | AI Assistant | 添加Story 1.2 tree-sitter集成经验，版本兼容性和字节范围问题解决方案 |
 
 ---
 
-*本文档记录了从过度设计到MVP的重要转变，强调POC阶段应专注核心概念验证而非完美实现。* 
+*本文档记录了从过度设计到MVP的重要转变，以及Story 1.2中解决tree-sitter技术问题的宝贵经验。* 

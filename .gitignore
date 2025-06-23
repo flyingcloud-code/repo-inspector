@@ -202,3 +202,4 @@ frontend/.next/
 logs/*
 *.log
 .venv/
+reference_code_repo/
