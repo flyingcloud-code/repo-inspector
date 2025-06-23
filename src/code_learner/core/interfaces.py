@@ -65,6 +65,7 @@ class IGraphStore(ABC):
     """图数据库存储接口
     
     负责将代码结构信息存储到Neo4j图数据库
+    简化版本 - 仅实现POC核心功能
     """
     
     @abstractmethod
@@ -82,11 +83,11 @@ class IGraphStore(ABC):
         pass
     
     @abstractmethod
-    def store_function(self, function: Function) -> bool:
-        """存储函数信息
+    def store_parsed_code(self, parsed_code: ParsedCode) -> bool:
+        """存储解析后的代码结构（文件+函数+关系）
         
         Args:
-            function: 函数对象
+            parsed_code: 解析后的代码对象
             
         Returns:
             bool: 存储是否成功
@@ -94,39 +95,11 @@ class IGraphStore(ABC):
         pass
     
     @abstractmethod
-    def store_file(self, file_info: FileInfo) -> bool:
-        """存储文件信息
+    def clear_database(self) -> bool:
+        """清空数据库（测试用）
         
-        Args:
-            file_info: 文件信息对象
-            
         Returns:
-            bool: 存储是否成功
-        """
-        pass
-    
-    @abstractmethod
-    def create_call_relationship(self, caller: str, callee: str) -> bool:
-        """创建函数调用关系
-        
-        Args:
-            caller: 调用者函数名
-            callee: 被调用者函数名
-            
-        Returns:
-            bool: 创建是否成功
-        """
-        pass
-    
-    @abstractmethod
-    def query_function_calls(self, function_name: str) -> List[str]:
-        """查询函数的调用关系
-        
-        Args:
-            function_name: 函数名
-            
-        Returns:
-            List[str]: 被调用的函数列表
+            bool: 清空是否成功
         """
         pass
 
@@ -134,7 +107,7 @@ class IGraphStore(ABC):
 class IVectorStore(ABC):
     """向量数据库存储接口
     
-    负责存储和检索代码的向量嵌入
+    负责存储和检索代码的向量嵌入，支持repo级别扩展
     """
     
     @abstractmethod
@@ -151,7 +124,7 @@ class IVectorStore(ABC):
     
     @abstractmethod
     def add_embeddings(self, embeddings: List[EmbeddingData]) -> bool:
-        """添加向量嵌入
+        """批量添加向量嵌入
         
         Args:
             embeddings: 嵌入数据列表
@@ -190,7 +163,7 @@ class IVectorStore(ABC):
 class IEmbeddingEngine(ABC):
     """嵌入生成引擎接口
     
-    负责生成代码的向量嵌入
+    负责生成代码的向量嵌入，支持repo级别批量处理
     """
     
     @abstractmethod
@@ -231,7 +204,7 @@ class IEmbeddingEngine(ABC):
     
     @abstractmethod
     def encode_batch(self, texts: List[str]) -> List[EmbeddingVector]:
-        """批量编码文本
+        """批量编码文本 - repo级别必需
         
         Args:
             texts: 文本列表
@@ -276,12 +249,52 @@ class IChatBot(ABC):
     
     @abstractmethod
     def generate_summary(self, code: str) -> str:
-        """生成代码摘要
+        """生成代码摘要 - 用户明确需要的功能
         
         Args:
             code: 源代码
             
         Returns:
             str: 代码摘要
+        """
+        pass
+
+
+class ICodeQAService(ABC):
+    """代码问答服务接口 (Story 1.4简化设计)
+    
+    统一处理向量嵌入、存储和问答功能，遵循KISS原则
+    """
+    
+    @abstractmethod
+    def initialize(self) -> bool:
+        """初始化所有组件 (Chroma + jina-embeddings + OpenRouter)
+        
+        Returns:
+            bool: 初始化是否成功
+        """
+        pass
+    
+    @abstractmethod
+    def embed_and_store_code(self, parsed_code: ParsedCode) -> bool:
+        """代码向量化并存储到Chroma
+        
+        Args:
+            parsed_code: 解析后的代码对象
+            
+        Returns:
+            bool: 存储是否成功
+        """
+        pass
+    
+    @abstractmethod
+    def ask_question(self, question: str) -> str:
+        """基于向量搜索回答问题
+        
+        Args:
+            question: 用户问题
+            
+        Returns:
+            str: 回答结果
         """
         pass 

@@ -28,10 +28,34 @@
 
 ## 技术亮点
 
-### 🏗️ **技术架构**
-- **模块化单体架构**：清晰的模块边界，易于维护
-- **本地部署**：所有处理在本地进行，保护代码隐私
-- **跨平台支持**：兼容Windows、Linux、macOS
+### 🏗️ 技术架构
+
+**设计原则:** KISS + SOLID + TDD + YAGNI
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   C 源代码文件   │───▶│  Tree-sitter   │───▶│   结构化数据    │
+│  (OpenSBI项目)  │    │   C语言解析器   │    │  (函数/调用图)  │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                                                        │
+                       ┌─────────────────┐             ▼
+                       │  智能问答系统   │    ┌─────────────────┐
+                       │  (OpenRouter)   │◀───│  Neo4j 图数据库 │
+                       └─────────────────┘    │   (代码关系)   │
+                                │             └─────────────────┘
+                                ▼                       │
+                       ┌─────────────────┐             ▼
+                       │   CodeQAService │    ┌─────────────────┐
+                       │  (统一问答服务)  │◀───│ Chroma 向量数据库│
+                       └─────────────────┘    │  (语义搜索)    │
+                                              └─────────────────┘
+```
+
+**核心组件:**
+- **CParser**: Tree-sitter C语言解析器
+- **Neo4jGraphStore**: 图数据库存储 (代码结构关系)
+- **CodeQAService**: 统一问答服务 (向量化+语义搜索+LLM问答)
+- **ConfigManager**: 配置管理 (环境变量+YAML)
 
 ### 🛠️ **技术栈**
 - **后端**：Python 3.9+ (异步处理，类型提示)
@@ -84,16 +108,31 @@ pip install click pytest flake8 mypy pyyaml requests neo4j>=5.25.0
 ```bash
 # 创建数据卷
 docker volume create neo4j_data
+docker volume create neo4j_logs
 
 # 启动Neo4j容器
 docker run -d --name neo4j-community \
+  --restart always \
   -p 7474:7474 -p 7687:7687 \
   -v neo4j_data:/data \
-  -e NEO4J_AUTH=neo4j/<your password> \
+  -v neo4j_logs:/logs \
+  -e NEO4J_AUTH=neo4j/your_password \
   neo4j:5.26-community
 
-# 访问Web界面
-curl http://localhost:7474
+# 验证安装
+docker ps | grep neo4j
+curl http://localhost:7474  # 访问Web界面
+```
+
+#### 4. 配置环境变量
+```bash
+# 创建.env文件
+cat > .env << EOF
+NEO4J_PASSWORD=your_password
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+VERBOSE=true
+EOF
 ```
 
 ### 🎯 POC目标
@@ -107,16 +146,41 @@ curl http://localhost:7474
 
 ### 快速开始 (POC版本)
 
+#### 验证环境
 ```bash
-# 分析OpenSBI项目
+# 激活虚拟环境
+source .venv/bin/activate
+
+# 运行环境测试
+python -m pytest tests/unit/test_ubuntu_environment.py -v
+
+# 测试Neo4j连接
+python -m pytest tests/integration/test_story_1_3_acceptance.py -v
+```
+
+#### 基本使用
+```bash
+# 分析OpenSBI项目 (计划中)
 code-learner analyze reference_code_repo/opensbi/
 
-# 基本问答
+# 基本问答 (计划中)
 code-learner ask "OpenSBI项目的主要模块有哪些？"
 code-learner ask "sbi_init函数在哪里定义？"
 
-# 初始化环境
+# 初始化环境 (计划中)
 code-learner setup
+```
+
+#### 开发者测试
+```bash
+# 测试C语言解析器
+python -m pytest tests/unit/test_c_parser.py -v
+
+# 测试Neo4j存储
+python -m pytest tests/integration/test_story_1_3_acceptance.py -v
+
+# 详细日志模式
+VERBOSE=true python -m pytest tests/integration/test_story_1_3_acceptance.py -v -s
 ```
 
 ### 主要命令
@@ -175,6 +239,92 @@ code-repo-learner/
 ├── tests/                     # 测试文件
 └── config/                    # 配置文件
 ```
+
+## Neo4j使用指南
+
+### 🔍 Neo4j Web界面
+
+**访问地址:** http://localhost:7474  
+**登录信息:** neo4j / your_password
+
+**常用Cypher查询:**
+```cypher
+// 查看所有节点和关系
+MATCH (n) RETURN n LIMIT 25
+
+// 查看文件包含的函数
+MATCH (f:File)-[:CONTAINS]->(fn:Function) 
+RETURN f.name, fn.name, fn.start_line, fn.end_line
+
+// 统计节点数量
+MATCH (n) RETURN labels(n) as type, count(n) as count
+
+// 查找特定函数
+MATCH (fn:Function {name: "main"}) 
+RETURN fn.name, fn.code, fn.start_line, fn.file_path
+
+// 清空所有数据
+MATCH (n) DETACH DELETE n
+```
+
+### ⚠️ 故障排除
+
+**1. Neo4j连接失败**
+```bash
+# 检查容器状态
+docker ps | grep neo4j
+docker logs neo4j-community
+
+# 重启容器
+docker restart neo4j-community
+
+# 重新创建容器
+docker rm -f neo4j-community
+docker run -d --name neo4j-community \
+  --restart always \
+  -p 7474:7474 -p 7687:7687 \
+  -v neo4j_data:/data \
+  -e NEO4J_AUTH=neo4j/your_password \
+  neo4j:5.26-community
+```
+
+**2. 认证错误**
+```bash
+# 检查环境变量
+echo $NEO4J_PASSWORD
+
+# 重置密码
+docker exec neo4j-community neo4j-admin dbms set-initial-password new_password
+```
+
+**3. 测试失败调试**
+```bash
+# 开启详细日志
+VERBOSE=true python -m pytest tests/integration/test_story_1_3_acceptance.py -v -s
+
+# 单独测试连接
+python -c "
+from src.code_learner.storage.neo4j_store import Neo4jGraphStore
+from src.code_learner.config.config_manager import ConfigManager
+store = Neo4jGraphStore()
+config = ConfigManager().get_config()
+result = store.connect(config.database.neo4j_uri, config.database.neo4j_user, config.database.neo4j_password)
+print(f'Connection result: {result}')
+store.close()
+"
+```
+
+### 📊 性能监控
+
+**连接池状态:**
+- 最大连接数: 50
+- 连接超时: 60秒
+- 自动重连: 支持
+
+**批量操作优化:**
+- 使用UNWIND批量创建节点
+- 事务安全保证数据一致性
+- 支持大文件和多函数处理
 
 ## 开发计划
 
