@@ -181,22 +181,73 @@ class IChatBot(ABC):         # 支持用户明确需求
   - 只关注函数定义和调用关系提取
   - 基本语法错误报告即可
 - **Ubuntu安装：**
-  ```bash
-  sudo apt install libtree-sitter-dev
-  pip install tree-sitter tree-sitter-c
-  ```
+```bash
+sudo apt install libtree-sitter-dev
+pip install tree-sitter tree-sitter-c
+```
+
+### TDR-003: 嵌入模型选择决策 (2025-06-23)
+
+**决策：** 继续使用jinaai/jina-embeddings-v2-base-code，暂不迁移到Qwen3-Embedding-0.6B
+
+**背景：** 完成了Qwen3-Embedding-0.6B模型的全面路径探索测试，对比了两个模型的性能表现
+
+**测试结果对比：**
+| 指标 | Jina v2 | Qwen3-0.6B | 差异 |
+|------|---------|------------|------|
+| 嵌入维度 | 768 | 1024 | +33% |
+| 加载时间 | 4.77秒 | 6.92秒 | +45% |
+| 编码时间 | 0.09秒 | 8.30秒 | +9122% |
+| 质量分数 | 1.000 | 0.998 | -0.2% |
+| 模型大小 | 322MB | 1.19GB | +270% |
+
+**决策理由：**
+1. **硬件限制：** 当前开发环境无NVIDIA显卡，无法利用GPU加速
+2. **性能瓶颈：** Qwen3编码时间过长（8.30秒 vs 0.09秒），影响开发体验
+3. **质量相当：** 两模型质量分数基本相等，差异可忽略
+4. **资源消耗：** Qwen3模型更大，对系统资源要求更高
+5. **现有稳定性：** Jina模型已验证可用，集成测试通过
+
+**Qwen3模型优势（未来考虑）：**
+- 嵌入维度更高（1024 vs 768），理论表达能力更强
+- MTEB排行榜性能更优（64.33 vs 约60）
+- 支持指令感知优化，可提升3-5%性能
+- 更好的多语言和编程语言支持
+- 更新的架构和训练数据
+
+**迁移条件（未来评估）：**
+- 获得NVIDIA显卡支持GPU加速
+- 性能要求提升，需要更高质量嵌入
+- 处理多语言代码项目
+- 需要指令感知优化功能
+
+**技术可行性验证：**
+- ✅ 依赖库版本满足（transformers 4.52.4 >= 4.51.0）
+- ✅ 模型可正常加载和使用
+- ✅ 输出格式兼容现有系统
+- ✅ 迁移路径清晰（更新配置+重建索引）
+
+**当前实施：**
+- 继续使用 `jinaai/jina-embeddings-v2-base-code`
+- 保留Qwen3测试代码用于未来评估
+- 在BKM中记录完整评估过程
+- 制定清晰的未来迁移计划
+
+**测试文件保留：**
+- `tests/qwen3_embedding_pathfinding.py` - 完整路径探索测试
+- `tests/check_qwen3_dependencies.py` - 依赖检查工具
 
 #### 向量数据库选择: Chroma
 - **决策：** 选择Chroma作为向量数据库
 - **理由：**
-  - 轻量级，易于本地部署
-  - 与Python生态集成良好
-  - 零配置启动，适合POC
-  - **Linux兼容性:** 原生Linux支持，提供预编译包
+- 轻量级，易于本地部署
+- 与Python生态集成良好
+- 零配置启动，适合POC
+- **Linux兼容性:** 原生Linux支持，提供预编译包
 - **POC实施要点：**
-  - 使用默认配置
-  - 单一集合存储即可
-  - 基本相似性搜索
+- 使用默认配置
+- 单一集合存储即可
+- 基本相似性搜索
 - **Ubuntu安装：**
   ```bash
   pip install chromadb>=1.0.13
@@ -779,7 +830,109 @@ def print_tree_with_bytes(node, depth=0):
 | 1.0 | 2025-01-17 | AI Assistant | Initial BKM creation with tech stack decisions |
 | 1.1 | 2025-01-17 | AI Assistant | 重大更新：添加POC vs 生产系统区别，过度设计教训，MVP原则应用 |
 | 1.2 | 2025-06-23 | AI Assistant | 添加Story 1.2 tree-sitter集成经验，版本兼容性和字节范围问题解决方案 |
+| 1.3 | 2025-06-24 | AI Assistant | 添加LLM服务最佳实践，Jina嵌入模型和OpenRouter API验证经验 |
+
+## LLM服务最佳实践 - 已验证 ✅
+
+### Jina嵌入模型 (jinaai/jina-embeddings-v2-base-code)
+
+**状态：** ✅ 已验证工作正常 (2025-06-24)
+
+**配置要点：**
+- 模型大小：约322MB，首次下载需要时间
+- 缓存位置：`~/.cache/torch/sentence_transformers/`
+- 嵌入维度：768维
+- 向量类型：numpy.ndarray
+
+**已知问题与解决方案：**
+- 模型加载时会显示大量警告信息，但这是正常现象，不影响功能
+- 如果遇到符号链接错误，删除缓存目录重新下载：
+  ```bash
+  rm -rf ~/.cache/torch/sentence_transformers/models--jinaai--jina-embeddings-v2-base-code
+  ```
+
+**测试验证：**
+```python
+# 测试脚本：tests/jina-test.py
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer('jinaai/jina-embeddings-v2-base-code')
+result = model.encode('int main() { return 0; }')
+print(f"嵌入维度: {len(result)}")  # 应该输出768
+```
+
+### OpenRouter API
+
+**状态：** ✅ 已验证工作正常 (2025-06-24)
+
+**配置要点：**
+- 环境变量：必须设置 `OPENROUTER_API_KEY`
+- 推荐模型：`google/gemini-2.0-flash-001`
+- 基础URL：`https://openrouter.ai/api/v1/chat/completions`
+
+**关键注意事项：**
+- HTTP头部不能包含中文字符，会导致编码错误
+- 使用英文标题：`"X-Title": "C Code Analysis Tool"`
+- API密钥长度通常为73个字符
+
+**测试验证：**
+```python
+# 测试脚本：tests/openrouter_test.py
+import requests
+response = requests.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    headers={"Authorization": f"Bearer {api_key}"},
+    json={"model": "google/gemini-2.0-flash-001", "messages": [{"role": "user", "content": "test"}]}
+)
+```
+
+### 集成服务工厂配置
+
+**修复的关键问题：**
+1. `ConfigManager.get_config()` 不接受参数，返回完整Config对象
+2. `ConfigurationError` 构造函数需要两个参数：`(config_key, message)`
+3. OpenRouterChatBot初始化需要api_key参数
+
+**正确的配置访问方式：**
+```python
+config = self.config_manager.get_config()
+embedding_config = {
+    "cache_dir": config.llm.embedding_cache_dir,
+    "model_name": config.llm.embedding_model_name
+}
+```
+
+### 性能优化建议
+
+**嵌入模型：**
+- 使用批量处理：`model.encode(texts, batch_size=32)`
+- 首次加载耗时较长，后续使用缓存快速启动
+- CPU模式下性能足够，无需GPU
+
+**OpenRouter API：**
+- 实施重试机制处理速率限制
+- 设置合理的超时时间（30秒）
+- 监控token使用量
+
+### 故障排除清单
+
+**嵌入模型问题：**
+- [ ] 检查缓存目录权限
+- [ ] 清理损坏的缓存文件
+- [ ] 验证网络连接（首次下载）
+- [ ] 检查磁盘空间（需要>500MB）
+
+**OpenRouter API问题：**
+- [ ] 验证API密钥有效性
+- [ ] 检查网络防火墙设置
+- [ ] 确认模型名称正确
+- [ ] 检查请求头编码（避免中文）
+
+**集成问题：**
+- [ ] 验证配置文件格式
+- [ ] 检查环境变量设置
+- [ ] 确认所有依赖已安装
+- [ ] 运行单元测试验证
 
 ---
 
-*本文档记录了从过度设计到MVP的重要转变，以及Story 1.2中解决tree-sitter技术问题的宝贵经验。* 
+*本文档记录了从过度设计到MVP的重要转变，以及Story 1.2中解决tree-sitter技术问题的宝贵经验，最新添加了LLM服务集成的实战经验。* 

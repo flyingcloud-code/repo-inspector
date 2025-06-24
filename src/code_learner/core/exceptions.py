@@ -80,4 +80,25 @@ class ValidationError(CodeLearnerError):
         self.field_name = field_name
         self.value = value
         self.message = message
-        super().__init__(f"Validation error for field '{field_name}' with value '{value}': {message}") 
+        super().__init__(f"Validation error for field '{field_name}' with value '{value}': {message}")
+
+
+class APIConnectionError(CodeLearnerError):
+    """API连接异常"""
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(f"API connection error: {message}")
+
+
+class ModelError(CodeLearnerError):
+    """模型运行异常"""
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(f"Model error: {message}")
+
+
+class ServiceError(CodeLearnerError):
+    """服务异常"""
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(f"Service error: {message}") 

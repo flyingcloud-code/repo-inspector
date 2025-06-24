@@ -1,13 +1,20 @@
 """
-LLM服务模块
+LLM模块
 
-提供代码向量嵌入和问答功能：
-- CodeQAService: 统一的代码问答服务 (Story 1.4)
+包含向量嵌入、向量存储、聊天机器人和综合服务
+支持repo级别的智能代码分析和问答
 """
 
-# Story 1.4 完成后将添加：
-# from .code_qa_service import CodeQAService
+from .embedding_engine import JinaEmbeddingEngine
+from .vector_store import ChromaVectorStore
+from .chatbot import OpenRouterChatBot
+from .service_factory import LLMServiceFactory
+from .code_qa_service import CodeQAService
 
 __all__ = [
-    # 'CodeQAService',  # Story 1.4实现后取消注释
+    "JinaEmbeddingEngine",
+    "ChromaVectorStore", 
+    "OpenRouterChatBot",
+    "LLMServiceFactory",
+    "CodeQAService"
 ]

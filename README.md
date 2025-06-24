@@ -143,6 +143,7 @@ EOF
 - 项目规模：289个文件，48,744行代码
 - 项目路径：`reference_code_repo/opensbi/`
 - 核心技术：Tree-sitter-c + Neo4j + Chroma + OpenRouter (google/gemini-2.0-flash-001)
+- **LLM服务状态：** ✅ Jina嵌入模型 + ✅ OpenRouter API 已验证
 
 ### 快速开始 (POC版本)
 
@@ -156,6 +157,10 @@ python -m pytest tests/unit/test_ubuntu_environment.py -v
 
 # 测试Neo4j连接
 python -m pytest tests/integration/test_story_1_3_acceptance.py -v
+
+# 验证LLM服务 ✅
+python tests/jina-test.py          # 测试嵌入模型
+python tests/openrouter_test.py   # 测试OpenRouter API
 ```
 
 #### 基本使用

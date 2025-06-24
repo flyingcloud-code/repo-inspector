@@ -134,6 +134,38 @@ class AnalysisSession:
         self.functions_found += functions_count
 
 
+@dataclass
+class ChatMessage:
+    """聊天消息数据模型"""
+    role: str  # 'system', 'user', 'assistant'
+    content: str
+    timestamp: datetime = field(default_factory=datetime.now)
+    
+    def __post_init__(self):
+        """数据验证"""
+        if self.role not in ['system', 'user', 'assistant']:
+            raise ValueError("role must be 'system', 'user', or 'assistant'")
+        if not self.content.strip():
+            raise ValueError("message content cannot be empty")
+
+
+@dataclass
+class ChatResponse:
+    """聊天响应数据模型"""
+    content: str
+    model: str
+    usage: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = field(default_factory=datetime.now)
+    
+    def __post_init__(self):
+        """数据验证"""
+        if not self.content.strip():
+            raise ValueError("response content cannot be empty")
+        if not self.model.strip():
+            raise ValueError("model name cannot be empty")
+
+
 # 类型别名
 FunctionCallGraph = Dict[str, List[str]]
 EmbeddingVector = List[float]
