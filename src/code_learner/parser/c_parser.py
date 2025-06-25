@@ -7,10 +7,10 @@ C语言解析器模块
 import tree_sitter_c as tsc
 from tree_sitter import Language, Parser
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from ..core.interfaces import IParser
-from ..core.data_models import Function, FileInfo, ParsedCode
+from ..core.data_models import Function, FileInfo, ParsedCode, FunctionCall
 from ..core.exceptions import ParseError
 
 
@@ -35,15 +35,19 @@ class CParser(IParser):
     
     def parse_file(self, file_path: Path) -> ParsedCode:
         """
-        解析C语言文件
+        解析单个C文件
         
         Args:
-            file_path: C文件路径
+            file_path: 文件路径
             
         Returns:
             ParsedCode: 解析结果
         """
         try:
+            # 确保路径是 Path 对象
+            if isinstance(file_path, str):
+                file_path = Path(file_path)
+                
             if not file_path.exists():
                 raise ParseError(str(file_path), f"File not found: {file_path}")
             
@@ -57,12 +61,19 @@ class CParser(IParser):
             # 提取函数信息
             functions = self.extract_functions(content, str(file_path))
             
+            # 提取函数调用关系 (Story 2.1.3)
+            try:
+                call_relationships = self.extract_function_calls(content, str(file_path))
+            except NotImplementedError:
+                call_relationships = []
+            
             # 创建文件信息
             file_info = FileInfo.from_path(file_path)
             
             return ParsedCode(
                 file_info=file_info,
-                functions=functions
+                functions=functions,
+                call_relationships=call_relationships
             )
             
         except Exception as e:
@@ -164,4 +175,107 @@ class CParser(IParser):
             # 这样可以处理语法错误的文件
             pass
         
-        return functions 
+        return functions
+
+    # Story 2.1 新增方法 - 占位实现 (将在Story 2.1.3中正式实现)
+    
+    def extract_function_calls(self, source_code: str, file_path: str) -> List[FunctionCall]:
+        """从源代码中提取函数调用关系（Tree-sitter实现）
+        
+        Args:
+            source_code: C源代码
+            file_path: 当前文件路径
+            
+        Returns:
+            List[FunctionCall]: 调用关系列表
+        """
+        call_relationships: List[FunctionCall] = []
+
+        try:
+            tree = self.parser.parse(bytes(source_code, "utf-8"))
+
+            # 辅助函数：获取函数名节点
+            def _get_function_name(func_def_node) -> Optional[str]:
+                # function_definition -> function_declarator -> identifier
+                for child in func_def_node.children:
+                    if child.type == "function_declarator":
+                        ident = child.child_by_field_name("declarator") or child.child_by_field_name("identifier")
+                        # tree-sitter-c 0.21 uses child_by_field_name("declarator") sometimes
+                        if ident and ident.type == "identifier":
+                            return ident.text.decode("utf-8")
+                return None
+
+            # 遍历 AST 并记录调用
+            cursor = tree.walk()
+
+            def _traverse(node, current_func: Optional[str]):
+                # 如果遇到函数定义，更新当前函数
+                if node.type == "function_definition":
+                    current_func = _get_function_name(node)
+
+                # 处理调用表达式
+                if node.type == "call_expression" and current_func:
+                    func_node = node.child_by_field_name("function")
+                    if func_node is None:
+                        func_node = node.child(0)  # 兜底
+
+                    # 识别调用类型与被调用者
+                    call_type = "direct"
+                    callee_name = "unknown"
+
+                    if func_node.type == "identifier":
+                        callee_name = func_node.text.decode("utf-8")
+                        if callee_name == current_func:
+                            call_type = "recursive"
+                    elif func_node.type in ("field_expression", "member_expression"):
+                        call_type = "member"
+                        # 取最后一个 identifier 作为函数名
+                        id_node = None
+                        for ch in func_node.children:
+                            if ch.type == "identifier":
+                                id_node = ch
+                        if id_node:
+                            callee_name = id_node.text.decode("utf-8")
+                    elif func_node.type == "pointer_expression":
+                        call_type = "pointer"
+                        # 尝试获取内部 identifier
+                        id_nodes = [ch for ch in func_node.children if ch.type == "identifier"]
+                        if id_nodes:
+                            callee_name = id_nodes[-1].text.decode("utf-8")
+
+                    line_no = node.start_point[0] + 1
+                    context_snippet = source_code.splitlines()[line_no - 1].strip()
+
+                    call_relationships.append(
+                        FunctionCall(
+                            caller_name=current_func,
+                            callee_name=callee_name,
+                            call_type=call_type,
+                            line_number=line_no,
+                            file_path=file_path,
+                            context=context_snippet
+                        )
+                    )
+
+                # 递归遍历子节点
+                for child in node.children:
+                    _traverse(child, current_func)
+
+            _traverse(cursor.node, None)
+
+        except Exception:
+            # 解析失败时返回空列表，调用方可记录 fallback
+            pass
+
+        return call_relationships
+    
+    def get_fallback_statistics(self):
+        """获取fallback统计信息 - 占位实现
+        
+        Returns:
+            FallbackStats: fallback使用统计
+            
+        Raises:
+            NotImplementedError: 功能将在Story 2.1.3中实现
+        """
+        raise NotImplementedError("get_fallback_statistics will be implemented in Story 2.1.3") 

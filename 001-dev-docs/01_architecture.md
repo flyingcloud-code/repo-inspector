@@ -63,7 +63,8 @@ src/code_learner/
 │   └── models.py           # 数据模型
 ├── parser/              # Tree-sitter解析器
 │   ├── __init__.py
-│   └── c_parser.py         # CParser实现
+│   ├── c_parser.py         # CParser实现
+│   └── treesitter_queries/  # Tree-sitter 查询模式 (.scm)
 ├── storage/             # 数据存储层
 │   ├── __init__.py
 │   ├── neo4j_store.py      # Neo4j图存储
@@ -88,11 +89,11 @@ src/code_learner/
 # core/interfaces.py - 5个核心接口
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
-from .models import Function, ParsedCode, EmbeddingData
+from typing import List, Dict, Any, Optional, Literal
+from .models import Function, ParsedCode, EmbeddingData, FunctionCall
 
 class IParser(ABC):
-    """C语言解析器接口"""
+    """C语言解析器接口 (v2) - 支持函数调用提取与统计"""
     @abstractmethod
     def parse_file(self, file_path: str) -> ParsedCode:
         pass
@@ -101,14 +102,30 @@ class IParser(ABC):
     def extract_functions(self, code: str) -> List[Function]:
         pass
 
+    @abstractmethod
+    def extract_function_calls(self, tree, src: str, file_path: str) -> List[FunctionCall]:
+        pass
+
+    @abstractmethod
+    def get_fallback_statistics(self) -> Dict[str, Any]:
+        pass
+
 class IGraphStore(ABC):
-    """图数据库存储接口"""
+    """图数据库存储接口 (v2) - 支持调用关系"""
     @abstractmethod
     def store_functions(self, functions: List[Function]) -> bool:
         pass
     
     @abstractmethod
     def create_call_relationship(self, caller: str, callee: str) -> bool:
+        pass
+
+    @abstractmethod
+    def store_call_relationships(self, calls: List[FunctionCall]) -> bool:
+        pass
+
+    @abstractmethod
+    def query_function_calls(self, function_name: str) -> List[str]:
         pass
 
 class IVectorStore(ABC):
@@ -167,6 +184,14 @@ class EmbeddingData:
     text: str
     embedding: List[float]
     metadata: Dict[str, Any]
+
+@dataclass
+class FunctionCall:
+    """函数调用关系数据模型"""
+    caller: str
+    callee: str
+    call_type: Literal['direct', 'pointer', 'member', 'recursive']
+    line_no: int
 ```
 
 ## 3. Ubuntu 24.04环境安装指南
@@ -281,6 +306,38 @@ python3 -c "import sqlite3; print('SQLite版本:', sqlite3.sqlite_version)"
 - Python标准库，无需额外安装
 - 用于存储项目元数据和配置
 
+#### 3.2.6 Radon (代码复杂度分析)
+
+Radon 是一个 **Python 代码复杂度分析工具**，可计算 *圈复杂度(Cyclomatic Complexity)* 等指标，帮助我们量化函数难度并在 **Story 2.1.6** 中生成 `complexity_score`。
+
+```bash
+# 安装
+pip install radon>=6.0
+
+# 基本用法
+radon cc src/ -s  # 输出每个函数的复杂度等级
+```
+
+#### 3.2.7 Neo4j APOC 插件 (增强型图算法库)
+
+APOC( **A**wesome **P**rocedures **O**n **C**ypher ) 是 Neo4j 官方维护的开源插件，提供数百个高性能的 **存储过程** 与 **函数**，包含路径搜索、可视化格式转换等高级操作。本项目将使用 APOC 的 `apoc.path.subgraphAll` 等过程在 **调用图深度分析** 与 **热点查询** 中提升性能。
+
+Docker 启动 Neo4j 并加载 APOC 插件示例：
+
+```bash
+docker run -d \
+  --name neo4j-community \
+  -p 7474:7474 -p 7687:7687 \
+  -v neo4j_data:/data \
+  -v neo4j_logs:/logs \
+  -e NEO4J_AUTH=neo4j/your_password \
+  -e NEO4J_ACCEPT_LICENSE_AGREEMENT=yes \
+  -e NEO4JLABS_PLUGINS='["apoc"]' \
+  neo4j:5.26-community
+```
+
+> **注意：** 首次启动会自动下载 APOC JAR 文件。
+
 ### 3.3 开发工具安装
 
 ```bash
@@ -322,6 +379,8 @@ click>=8.0.0
 pyyaml>=6.0.0
 requests>=2.31.0
 numpy>=1.24.0
+radon>=6.0        # 复杂度分析
+mermaid-cli>=10.0.0  # 调用图 Mermaid 渲染 (可选)
 ```
 
 ## 4. 配置管理系统

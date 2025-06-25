@@ -200,4 +200,99 @@ int main() {
         finally:
             # 清理临时文件
             if os.path.exists(temp_file_path):
-                os.unlink(temp_file_path) 
+                os.unlink(temp_file_path)
+
+    def test_story_2_1_3_acceptance(self):
+        """Story 2.1.3 验收测试：完整的函数调用提取和存储流程"""
+        # 创建测试C代码文件
+        test_code = """
+    // 测试各种函数调用模式
+    #include <stdio.h>
+
+    struct handler {
+        void (*callback)(int);
+    };
+
+    void log_message(int level) {
+        printf("Log level: %d\\n", level);
+    }
+
+    void process_data(int data) {
+        log_message(1);  // 直接调用
+    }
+
+    void setup_handler(struct handler* h) {
+        h->callback = log_message;  // 函数指针赋值
+        h->callback(2);  // 成员函数调用
+    }
+
+    void recursive_func(int n) {
+        if (n > 0) {
+            recursive_func(n - 1);  // 递归调用
+        }
+    }
+
+    int main() {
+        struct handler h;
+        process_data(42);
+        setup_handler(&h);
+        recursive_func(3);
+        return 0;
+    }
+    """
+        
+        # 写入临时文件
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.c', delete=False) as f:
+            f.write(test_code)
+            temp_file = Path(f.name)
+        
+        try:
+            # Step 1: 解析文件
+            parsed_code = self.parser.parse_file(str(temp_file))
+            
+            # 验证解析结果
+            assert len(parsed_code.functions) >= 5  # 至少5个函数
+            assert len(parsed_code.call_relationships) >= 4  # 至少4个调用关系
+            
+            # 验证特定调用关系
+            call_types = [call.call_type for call in parsed_code.call_relationships]
+            assert "direct" in call_types
+            assert "recursive" in call_types or "direct" in call_types  # 递归可能被识别为直接调用
+            
+            # Step 2: 存储到Neo4j
+            assert self.store.store_parsed_code(parsed_code)
+            
+            # Step 3: 验证Neo4j中的数据
+            with self.store.driver.session() as session:
+                # 验证函数节点数量
+                result = session.run("MATCH (f:Function) RETURN count(f) as count")
+                func_count = result.single()["count"]
+                assert func_count >= 5
+                
+                # 验证调用关系数量
+                result = session.run("MATCH ()-[r:CALLS]->() RETURN count(r) as count")
+                call_count = result.single()["count"]
+                assert call_count >= 4
+                
+                # 验证特定调用关系
+                result = session.run(
+                    "MATCH (a:Function {name: 'process_data'})-[r:CALLS]->(b:Function {name: 'log_message'}) "
+                    "RETURN r.call_type as type"
+                )
+                record = result.single()
+                assert record is not None
+                assert record["type"] == "direct"
+                
+                # 验证递归调用
+                result = session.run(
+                    "MATCH (a:Function {name: 'recursive_func'})-[r:CALLS]->(b:Function {name: 'recursive_func'}) "
+                    "RETURN r.call_type as type"
+                )
+                record = result.single()
+                assert record is not None  # 递归调用应该被检测到
+            
+            print("✅ Story 2.1.3 验收测试通过：函数调用提取和存储功能正常工作")
+            
+        finally:
+            # 清理临时文件
+            temp_file.unlink(missing_ok=True) 

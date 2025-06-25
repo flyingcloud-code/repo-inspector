@@ -2,6 +2,7 @@
 
 定义系统中使用的所有数据结构和类型
 """
+from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 from pathlib import Path
@@ -10,7 +11,7 @@ from datetime import datetime
 
 @dataclass
 class Function:
-    """函数信息数据模型"""
+    """函数信息数据模型 - 扩展版本支持调用关系分析"""
     name: str
     code: str
     start_line: int
@@ -21,6 +22,16 @@ class Function:
     calls: List[str] = field(default_factory=list)  # 调用的其他函数
     called_by: List[str] = field(default_factory=list)  # 被哪些函数调用
     
+    # Story 2.1.2 新增字段
+    complexity_score: Optional[float] = None  # 复杂度评分
+    is_static: bool = False  # 是否为静态函数
+    is_inline: bool = False  # 是否为内联函数
+    docstring: Optional[str] = None  # 函数文档字符串
+    parameter_types: List[str] = field(default_factory=list)  # 参数类型列表
+    local_variables: List[str] = field(default_factory=list)  # 局部变量
+    macro_calls: List[str] = field(default_factory=list)  # 宏调用
+    call_contexts: Dict[str, List[str]] = field(default_factory=dict)  # 调用上下文
+    
     def __post_init__(self):
         """数据验证"""
         if self.start_line < 0:
@@ -29,11 +40,76 @@ class Function:
             raise ValueError("end_line must be >= start_line")
         if not self.name.strip():
             raise ValueError("function name cannot be empty")
+    
+    def add_call(self, callee: str, context: str = ""):
+        """添加函数调用关系
+        
+        Args:
+            callee: 被调用函数名
+            context: 调用上下文代码
+        """
+        if callee not in self.calls:
+            self.calls.append(callee)
+        
+        if callee not in self.call_contexts:
+            self.call_contexts[callee] = []
+        if context and context not in self.call_contexts[callee]:
+            self.call_contexts[callee].append(context)
+    
+    def add_caller(self, caller: str):
+        """添加调用者关系
+        
+        Args:
+            caller: 调用者函数名
+        """
+        if caller not in self.called_by:
+            self.called_by.append(caller)
+    
+    def get_call_count(self) -> int:
+        """获取调用其他函数的数量"""
+        return len(self.calls)
+    
+    def get_caller_count(self) -> int:
+        """获取被调用次数"""
+        return len(self.called_by)
+    
+    def is_leaf_function(self) -> bool:
+        """判断是否为叶子函数（不调用其他函数）"""
+        return len(self.calls) == 0
+    
+    def is_entry_function(self) -> bool:
+        """判断是否为入口函数（不被其他函数调用）"""
+        return len(self.called_by) == 0
+    
+    def get_lines_of_code(self) -> int:
+        """获取函数代码行数"""
+        return self.end_line - self.start_line + 1
+    
+    def calculate_complexity_score(self) -> float:
+        """计算函数复杂度评分"""
+        if self.complexity_score is not None:
+            return self.complexity_score
+        
+        # 简单的复杂度计算：基于代码行数和调用关系
+        loc = self.get_lines_of_code()
+        call_count = self.get_call_count()
+        
+        # 基础复杂度：代码行数 * 0.1
+        base_complexity = loc * 0.1
+        
+        # 调用复杂度：调用函数数量 * 0.2
+        call_complexity = call_count * 0.2
+        
+        # 总复杂度
+        total_complexity = base_complexity + call_complexity
+        
+        self.complexity_score = round(total_complexity, 2)
+        return self.complexity_score
 
 
 @dataclass
 class FileInfo:
-    """文件信息数据模型"""
+    """文件信息数据模型 - 扩展版本支持多维度文件分析"""
     path: str
     name: str
     size: int
@@ -41,24 +117,94 @@ class FileInfo:
     functions: List[Function] = field(default_factory=list)
     includes: List[str] = field(default_factory=list)  # #include 依赖
     
+    # Story 2.1.2 新增字段
+    file_type: str = "c"  # 文件类型：c, h, cpp, etc.
+    encoding: str = "utf-8"  # 文件编码
+    line_count: int = 0  # 总行数
+    code_lines: int = 0  # 代码行数（非空非注释）
+    comment_lines: int = 0  # 注释行数
+    blank_lines: int = 0  # 空行数
+    macro_definitions: List[str] = field(default_factory=list)  # 宏定义
+    struct_definitions: List[str] = field(default_factory=list)  # 结构体定义
+    global_variables: List[str] = field(default_factory=list)  # 全局变量
+    typedefs: List[str] = field(default_factory=list)  # 类型定义
+    header_comments: List[str] = field(default_factory=list)  # 文件头注释
+    semantic_category: Optional[str] = None  # 语义分类
+    
     @classmethod
     def from_path(cls, file_path: Path) -> 'FileInfo':
         """从文件路径创建FileInfo"""
         stat = file_path.stat()
+        file_type = file_path.suffix.lstrip('.').lower() if file_path.suffix else 'unknown'
+        
         return cls(
             path=str(file_path),
             name=file_path.name,
             size=stat.st_size,
-            last_modified=datetime.fromtimestamp(stat.st_mtime)
+            last_modified=datetime.fromtimestamp(stat.st_mtime),
+            file_type=file_type
         )
+    
+    def add_function(self, function: Function):
+        """添加函数信息"""
+        if function not in self.functions:
+            self.functions.append(function)
+    
+    def get_function_by_name(self, name: str) -> Optional[Function]:
+        """根据名称查找函数"""
+        for func in self.functions:
+            if func.name == name:
+                return func
+        return None
+    
+    def get_function_count(self) -> int:
+        """获取函数数量"""
+        return len(self.functions)
+    
+    def get_total_loc(self) -> int:
+        """获取总代码行数"""
+        return sum(func.get_lines_of_code() for func in self.functions)
+    
+    def get_average_function_complexity(self) -> float:
+        """获取平均函数复杂度"""
+        if not self.functions:
+            return 0.0
+        
+        total_complexity = sum(func.calculate_complexity_score() for func in self.functions)
+        return round(total_complexity / len(self.functions), 2)
+    
+    def get_include_dependencies(self) -> List[str]:
+        """获取include依赖列表"""
+        return self.includes.copy()
+    
+    def calculate_file_metrics(self) -> Dict[str, Any]:
+        """计算文件指标"""
+        return {
+            'function_count': self.get_function_count(),
+            'total_loc': self.get_total_loc(),
+            'average_complexity': self.get_average_function_complexity(),
+            'include_count': len(self.includes),
+            'macro_count': len(self.macro_definitions),
+            'struct_count': len(self.struct_definitions),
+            'global_var_count': len(self.global_variables),
+            'file_size_kb': round(self.size / 1024, 2),
+            'code_density': round(self.code_lines / max(self.line_count, 1), 2)
+        }
 
 
 @dataclass
 class ParsedCode:
-    """解析后的代码结构"""
+    """解析后的代码结构 - 扩展版本支持高级分析功能"""
     file_info: FileInfo
     functions: List[Function]
     ast_data: Optional[Dict[str, Any]] = None  # 原始AST数据
+    
+    # Story 2.1.2 新增字段
+    parsing_time: float = 0.0  # 解析耗时（秒）
+    parsing_method: str = "tree_sitter"  # 解析方法：tree_sitter, regex_fallback
+    error_count: int = 0  # 解析错误数量
+    warnings: List[str] = field(default_factory=list)  # 解析警告
+    call_relationships: List[FunctionCall] = field(default_factory=list)  # 函数调用关系
     
     def get_function_by_name(self, name: str) -> Optional[Function]:
         """根据名称查找函数"""
@@ -70,6 +216,102 @@ class ParsedCode:
     def get_function_calls(self) -> Dict[str, List[str]]:
         """获取函数调用关系图"""
         return {func.name: func.calls for func in self.functions}
+    
+    def add_function_call_relationship(self, caller: str, callee: str, call_type: str, 
+                                     line_number: int, context: str = ""):
+        """添加函数调用关系
+        
+        Args:
+            caller: 调用者函数名
+            callee: 被调用函数名
+            call_type: 调用类型
+            line_number: 调用行号
+            context: 调用上下文
+        """
+        call_rel = FunctionCall(
+            caller_name=caller,
+            callee_name=callee,
+            call_type=call_type,
+            line_number=line_number,
+            file_path=self.file_info.path,
+            context=context
+        )
+        self.call_relationships.append(call_rel)
+        
+        # 同时更新Function对象的调用关系
+        caller_func = self.get_function_by_name(caller)
+        if caller_func:
+            caller_func.add_call(callee, context)
+        
+        callee_func = self.get_function_by_name(callee)
+        if callee_func:
+            callee_func.add_caller(caller)
+    
+    def get_call_relationships_by_caller(self, caller: str) -> List[FunctionCall]:
+        """获取指定函数的所有调用关系"""
+        return [call for call in self.call_relationships if call.caller_name == caller]
+    
+    def get_call_relationships_by_callee(self, callee: str) -> List[FunctionCall]:
+        """获取调用指定函数的所有关系"""
+        return [call for call in self.call_relationships if call.callee_name == callee]
+    
+    def get_function_call_graph(self) -> Dict[str, List[str]]:
+        """获取函数调用图（基于call_relationships）"""
+        call_graph = {}
+        for call in self.call_relationships:
+            if call.caller_name not in call_graph:
+                call_graph[call.caller_name] = []
+            if call.callee_name not in call_graph[call.caller_name]:
+                call_graph[call.caller_name].append(call.callee_name)
+        return call_graph
+    
+    def find_entry_functions(self) -> List[Function]:
+        """查找入口函数（不被其他函数调用）"""
+        all_callees = {call.callee_name for call in self.call_relationships}
+        return [func for func in self.functions if func.name not in all_callees]
+    
+    def find_leaf_functions(self) -> List[Function]:
+        """查找叶子函数（不调用其他函数）"""
+        all_callers = {call.caller_name for call in self.call_relationships}
+        return [func for func in self.functions if func.name not in all_callers]
+    
+    def calculate_cyclomatic_complexity(self) -> Dict[str, float]:
+        """计算环形复杂度（简化版本）"""
+        complexity_map = {}
+        for func in self.functions:
+            complexity_map[func.name] = func.calculate_complexity_score()
+        return complexity_map
+    
+    def get_parsing_summary(self) -> Dict[str, Any]:
+        """获取解析摘要"""
+        return {
+            'file_path': self.file_info.path,
+            'file_size': self.file_info.size,
+            'function_count': len(self.functions),
+            'call_relationship_count': len(self.call_relationships),
+            'parsing_time': self.parsing_time,
+            'parsing_method': self.parsing_method,
+            'error_count': self.error_count,
+            'warning_count': len(self.warnings),
+            'entry_function_count': len(self.find_entry_functions()),
+            'leaf_function_count': len(self.find_leaf_functions())
+        }
+    
+    def validate_call_relationships(self) -> List[str]:
+        """验证调用关系的一致性"""
+        validation_errors = []
+        
+        for call in self.call_relationships:
+            # 检查调用者是否存在
+            if not self.get_function_by_name(call.caller_name):
+                validation_errors.append(f"Caller function '{call.caller_name}' not found in functions list")
+            
+            # 检查被调用者是否在同一文件中定义（可选检查）
+            if not self.get_function_by_name(call.callee_name):
+                # 这可能是外部函数调用，记录为信息而非错误
+                pass
+        
+        return validation_errors
 
 
 @dataclass
@@ -169,4 +411,155 @@ class ChatResponse:
 # 类型别名
 FunctionCallGraph = Dict[str, List[str]]
 EmbeddingVector = List[float]
-MetadataDict = Dict[str, Any] 
+MetadataDict = Dict[str, Any]
+
+# Story 2.1 新增数据模型
+
+@dataclass
+class FunctionCall:
+    """函数调用关系数据模型"""
+    caller_name: str
+    callee_name: str
+    call_type: str  # 'direct', 'pointer', 'member', 'recursive'
+    line_number: int
+    file_path: str
+    context: str  # 调用上下文代码片段
+    
+    def __post_init__(self):
+        """数据验证"""
+        if not self.caller_name.strip():
+            raise ValueError("caller_name cannot be empty")
+        if not self.callee_name.strip():
+            raise ValueError("callee_name cannot be empty")
+        if self.call_type not in ['direct', 'pointer', 'member', 'recursive']:
+            raise ValueError("call_type must be one of: direct, pointer, member, recursive")
+        if self.line_number < 1:
+            raise ValueError("line_number must be positive")
+
+
+@dataclass  
+class FallbackStats:
+    """Fallback统计信息数据模型"""
+    total_functions: int = 0
+    treesitter_success: int = 0
+    regex_fallback: int = 0
+    fallback_reasons: Dict[str, int] = field(default_factory=dict)
+    processing_times: List[float] = field(default_factory=list)
+    timestamp: datetime = field(default_factory=datetime.now)
+    
+    def add_success(self, processing_time: float):
+        """记录成功解析"""
+        self.total_functions += 1
+        self.treesitter_success += 1
+        self.processing_times.append(processing_time)
+    
+    def add_fallback(self, reason: str, processing_time: float):
+        """记录fallback使用"""
+        self.total_functions += 1
+        self.regex_fallback += 1
+        if reason not in self.fallback_reasons:
+            self.fallback_reasons[reason] = 0
+        self.fallback_reasons[reason] += 1
+        self.processing_times.append(processing_time)
+    
+    @property
+    def fallback_rate(self) -> float:
+        """计算fallback使用率"""
+        if self.total_functions == 0:
+            return 0.0
+        return self.regex_fallback / self.total_functions
+    
+    @property
+    def average_processing_time(self) -> float:
+        """计算平均处理时间"""
+        if not self.processing_times:
+            return 0.0
+        return sum(self.processing_times) / len(self.processing_times)
+
+
+@dataclass
+class FolderInfo:
+    """文件夹信息数据模型"""
+    path: str
+    name: str
+    level: int
+    file_count: int
+    c_file_count: int
+    h_file_count: int
+    semantic_category: str  # 'core', 'driver', 'lib', 'test', 'util', etc.
+    
+    def __post_init__(self):
+        """数据验证"""
+        if not self.path.strip():
+            raise ValueError("folder path cannot be empty")
+        if self.level < 0:
+            raise ValueError("folder level must be non-negative")
+        if self.file_count < 0:
+            raise ValueError("file_count must be non-negative")
+
+
+@dataclass
+class FolderStructure:
+    """文件夹结构数据模型"""
+    folders: List[FolderInfo] = field(default_factory=list)
+    files: List[FileInfo] = field(default_factory=list)
+    naming_patterns: Dict[str, int] = field(default_factory=dict)
+    
+    def add_folder(self, folder_info: FolderInfo):
+        """添加文件夹信息"""
+        self.folders.append(folder_info)
+    
+    def add_file(self, file_info: FileInfo):
+        """添加文件信息"""
+        self.files.append(file_info)
+    
+    def get_folders_by_category(self, category: str) -> List[FolderInfo]:
+        """根据语义分类获取文件夹"""
+        return [folder for folder in self.folders if folder.semantic_category == category]
+
+
+@dataclass
+class Documentation:
+    """文档信息数据模型"""
+    readme_files: Dict[str, str] = field(default_factory=dict)
+    file_comments: Dict[str, List[str]] = field(default_factory=dict)
+    api_docs: List[str] = field(default_factory=list)
+    
+    def add_readme(self, filename: str, content: str):
+        """添加README文件内容"""
+        self.readme_files[filename] = content
+    
+    def add_comments(self, filename: str, comments: List[str]):
+        """添加文件注释"""
+        self.file_comments[filename] = comments
+    
+    def get_all_text(self) -> str:
+        """获取所有文档文本"""
+        all_text = []
+        for content in self.readme_files.values():
+            all_text.append(content)
+        for comments in self.file_comments.values():
+            all_text.extend(comments)
+        all_text.extend(self.api_docs)
+        return "\n".join(all_text)
+
+
+@dataclass
+class AnalysisResult:
+    """多路分析结果数据模型"""
+    folder_structure: FolderStructure
+    documentation: Documentation
+    functions: List[Function]
+    call_relationships: List[FunctionCall]
+    function_embeddings: List[EmbeddingData]
+    doc_embeddings: List[EmbeddingData]
+    fallback_stats: FallbackStats
+    performance_metrics: Dict[str, Any] = field(default_factory=dict)
+    
+    def get_function_calls_by_caller(self, caller_name: str) -> List[FunctionCall]:
+        """获取指定函数的所有调用"""
+        return [call for call in self.call_relationships if call.caller_name == caller_name]
+    
+    def get_function_calls_by_callee(self, callee_name: str) -> List[FunctionCall]:
+        """获取调用指定函数的所有调用关系"""
+        return [call for call in self.call_relationships if call.callee_name == callee_name] 

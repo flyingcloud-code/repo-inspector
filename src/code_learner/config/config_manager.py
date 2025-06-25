@@ -68,7 +68,7 @@ class ParserConfig:
 @dataclass
 class LoggingConfig:
     """日志配置"""
-    level: str = "INFO"
+    level: str  # 移除默认值，强制验证
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     file_enabled: bool = True
     file_path: str = "./logs/code_learner.log"
@@ -125,17 +125,18 @@ class ConfigManager:
         return cls._instance
 
     def load_config(self, config_path: Optional[Path] = None) -> Config:
-        """加载配置
-
+        """加载配置文件
+        
         Args:
-            config_path: 配置文件路径，默认为 config/config.yml
-
+            config_path: 配置文件路径，如果为None则使用默认路径
+            
         Returns:
             Config: 配置对象
-
+            
         Raises:
-            ConfigurationError: 配置加载失败
+            ConfigurationError: 配置错误
         """
+        # 如果已经加载过配置，直接返回
         if self._config is not None:
             return self._config
 
@@ -153,6 +154,9 @@ class ConfigManager:
 
             # 应用环境变量覆盖
             config_data = self._apply_environment_overrides(config_data)
+
+            # 预处理配置数据 - 确保日志级别有效
+            self._preprocess_config_data(config_data)
 
             # 创建配置对象
             self._config = self._create_config_objects(config_data)
@@ -203,6 +207,20 @@ class ConfigManager:
                 current[config_path[-1]] = env_value
 
         return config_data
+
+    def _preprocess_config_data(self, config_data: Dict[str, Any]) -> None:
+        """预处理配置数据，确保关键字段有效"""
+        # 验证日志级别
+        logging_config = config_data.get('logging', {})
+        if 'level' in logging_config:
+            log_level = logging_config['level']
+            valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+            if log_level.upper() not in valid_levels:
+                raise ConfigurationError('log_level', f"Invalid log level: {log_level}. Valid levels are: {', '.join(valid_levels)}")
+        else:
+            # 设置默认日志级别
+            logging_config['level'] = 'INFO'
+            config_data['logging'] = logging_config
 
     def _create_config_objects(self, config_data: Dict[str, Any]) -> Config:
         """创建配置对象"""
@@ -258,13 +276,18 @@ class ConfigManager:
             encoding=options.get('encoding', 'utf-8')
         )
 
-        # 日志配置
+        # 日志配置 - 保留原始值，不使用默认值
         logging_config = config_data.get('logging', {})
         file_config = logging_config.get('file', {})
         console_config = logging_config.get('console', {})
 
+        # 获取日志级别，如果不存在才使用默认值
+        log_level = logging_config.get('level')
+        if log_level is None:
+            log_level = 'INFO'
+
         logging = LoggingConfig(
-            level=logging_config.get('level', 'INFO'),
+            level=log_level,  # 使用原始值
             format=logging_config.get('format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s'),
             file_enabled=file_config.get('enabled', True),
             file_path=file_config.get('path', './logs/code_learner.log'),
@@ -321,10 +344,10 @@ class ConfigManager:
         for dir_path in [config.app.data_dir, config.app.logs_dir, config.app.cache_dir]:
             Path(dir_path).mkdir(parents=True, exist_ok=True)
 
-        # 验证日志级别
-        valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
-        if config.logging.level not in valid_levels:
-            raise ConfigurationError('log_level', f"Invalid log level: {config.logging.level}")
+        # 验证日志级别 - 修复验证逻辑
+        valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+        if config.logging.level.upper() not in valid_levels:
+            raise ConfigurationError('log_level', f"Invalid log level: {config.logging.level}. Valid levels are: {', '.join(valid_levels)}")
 
     def get_config(self) -> Config:
         """获取当前配置"""

@@ -10,11 +10,13 @@ from .vector_store import ChromaVectorStore
 from .chatbot import OpenRouterChatBot
 from .service_factory import LLMServiceFactory
 from .code_qa_service import CodeQAService
+from .call_graph_service import CallGraphService
 
 __all__ = [
     "JinaEmbeddingEngine",
     "ChromaVectorStore", 
     "OpenRouterChatBot",
     "LLMServiceFactory",
-    "CodeQAService"
+    "CodeQAService",
+    "CallGraphService"
 ]

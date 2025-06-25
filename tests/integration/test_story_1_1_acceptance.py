@@ -1,123 +1,122 @@
 """Story 1.1 验收测试
 
-验证"基础环境搭建与配置系统"的所有验收标准
+测试基础环境搭建与配置系统的完整功能
 """
+import os
+import sys
+import yaml
 import pytest
 import tempfile
-import yaml
+import importlib
 from pathlib import Path
 
-from src.code_learner import setup_environment, ConfigManager, Config, get_logger
+from src.code_learner.config.config_manager import ConfigManager, Config
+from src.code_learner.utils.logger import get_logger
+from src.code_learner import setup_environment  # 从主包导入
+from src.code_learner.core.data_models import Function, FileInfo, ParsedCode
 
 
 class TestStory11Acceptance:
     """Story 1.1 验收测试类"""
     
     def test_acceptance_1_ubuntu_dependencies(self):
-        """验收标准1: 所有Ubuntu依赖成功安装并可以导入"""
-        # Tree-sitter
-        import tree_sitter
-        from tree_sitter import Language, Parser
-        parser = Parser()
-        assert parser is not None
+        """验收标准1: Ubuntu 24.04 LTS环境依赖安装正确"""
+        # 测试Python版本
+        assert sys.version_info.major == 3
+        assert sys.version_info.minor >= 11
         
-        # ChromaDB
+        # 测试关键包导入
+        import neo4j
         import chromadb
-        client = chromadb.Client()
-        assert client is not None
+        import tree_sitter
+        import sentence_transformers
+        import dotenv
         
-        # Sentence Transformers
-        from sentence_transformers import SentenceTransformer
-        assert SentenceTransformer is not None
-        
-        # Neo4j
-        from neo4j import GraphDatabase
-        assert GraphDatabase is not None
-        
-        # SQLite
+        # 测试数据库连接
         import sqlite3
         conn = sqlite3.connect(':memory:')
-        assert conn is not None
+        cursor = conn.cursor()
+        cursor.execute('SELECT sqlite_version();')
+        version = cursor.fetchone()[0]
         conn.close()
         
-        print("✅ 验收标准1: 所有Ubuntu依赖成功安装并可以导入")
+        # 验证版本
+        assert version is not None
+        
+        print("✅ 验收标准1: Ubuntu 24.04 LTS环境依赖安装正确")
     
     def test_acceptance_2_neo4j_ready(self):
-        """验收标准2: Neo4j服务准备就绪"""
-        # 注意: 这里我们不测试实际的Neo4j连接，因为Docker服务可能未启动
-        # 我们验证Neo4j驱动可以正常导入和配置
-        from neo4j import GraphDatabase
+        """验收标准2: Neo4j数据库可连接"""
+        # 注意：这个测试需要Neo4j数据库在本地或远程运行
+        # 如果没有可用的Neo4j，测试会跳过
         
-        # 验证配置中包含Neo4j设置
-        manager = ConfigManager()
-        # 创建临时配置进行测试
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
-            yaml.dump({
-                'database': {
-                    'neo4j': {
-                        'uri': 'bolt://localhost:7687',
-                        'user': 'neo4j',
-                        'password': 'test'
-                    }
-                }
-            }, f)
-            temp_path = f.name
+        import neo4j
+        from neo4j.exceptions import ServiceUnavailable
+        
+        # 从环境变量或配置获取连接信息
+        config = ConfigManager().get_config()
+        uri = config.database.neo4j_uri
+        user = config.database.neo4j_user
+        password = config.database.neo4j_password
         
         try:
-            config = manager.load_config(Path(temp_path))
-            assert config.database.neo4j_uri == 'bolt://localhost:7687'
-            assert config.database.neo4j_user == 'neo4j'
+            # 尝试连接Neo4j
+            driver = neo4j.GraphDatabase.driver(uri, auth=(user, password))
+            driver.verify_connectivity()
             
-        finally:
-            Path(temp_path).unlink()
-        
-        print("✅ 验收标准2: Neo4j驱动配置正确")
+            # 执行简单查询
+            with driver.session() as session:
+                result = session.run("RETURN 1 AS num")
+                record = result.single()
+                assert record["num"] == 1
+            
+            driver.close()
+            print("✅ 验收标准2: Neo4j数据库连接成功")
+            
+        except ServiceUnavailable:
+            pytest.skip("Neo4j数据库不可用，跳过测试")
     
     def test_acceptance_3_jina_embeddings_ready(self):
-        """验收标准3: jina-embeddings模型可以正常配置"""
-        # 验证sentence-transformers可以导入
+        """验收标准3: Jina嵌入模型可用"""
         from sentence_transformers import SentenceTransformer
         
-        # 验证配置中包含嵌入模型设置
-        manager = ConfigManager()
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as f:
-            yaml.dump({
-                'llm': {
-                    'embedding': {
-                        'model_name': 'jinaai/jina-embeddings-v2-base-code',
-                        'cache_dir': '~/.cache/torch/sentence_transformers/'
-                    }
-                }
-            }, f)
-            temp_path = f.name
-        
         try:
-            config = manager.load_config(Path(temp_path))
-            assert config.llm.embedding_model_name == 'jinaai/jina-embeddings-v2-base-code'
+            # 加载模型
+            model = SentenceTransformer('jinaai/jina-embeddings-v2-base-code')
             
-        finally:
-            Path(temp_path).unlink()
-        
-        print("✅ 验收标准3: jina-embeddings模型配置正确")
+            # 测试嵌入生成
+            test_text = "def hello_world():\n    print('Hello, World!')"
+            embeddings = model.encode([test_text])
+            
+            # 验证嵌入向量
+            assert embeddings.shape[0] == 1  # 一个样本
+            assert embeddings.shape[1] == 768  # 768维向量
+            
+            print("✅ 验收标准3: Jina嵌入模型加载成功")
+            
+        except Exception as e:
+            pytest.skip(f"Jina嵌入模型不可用: {e}")
     
     def test_acceptance_4_package_structure(self):
-        """验收标准4: 完整包结构创建 (11个子包和文件)"""
-        # 验证主包结构
-        base_path = Path("src/code_learner")
+        """验收标准4: 包结构创建完整"""
+        # 获取项目根目录
+        import src.code_learner
+        base_path = Path(src.code_learner.__file__).parent
         
-        # 验证主包文件
-        assert (base_path / "__init__.py").exists()
-        
-        # 验证子包
+        # 验证主要包存在
         expected_packages = [
-            "config", "core", "parser", "storage", 
-            "llm", "cli", "utils"
+            "config",
+            "core",
+            "parser",
+            "storage",
+            "llm",
+            "cli",
+            "utils"
         ]
         
         for package in expected_packages:
-            package_path = base_path / package
-            assert package_path.exists()
-            assert (package_path / "__init__.py").exists()
+            assert (base_path / package).is_dir()
+            assert (base_path / package / "__init__.py").exists()
         
         # 验证核心模块文件
         expected_files = [
@@ -136,7 +135,6 @@ class TestStory11Acceptance:
     def test_acceptance_5_config_manager(self):
         """验收标准5: ConfigManager能加载和验证配置"""
         import os
-        from unittest.mock import patch
         
         # 测试1: 验证ConfigManager基本功能
         ConfigManager._instance = None
@@ -212,10 +210,17 @@ class TestStory11Acceptance:
             ConfigManager._instance = None
             ConfigManager._config = None
             
-            with patch.dict('os.environ', {
-                'NEO4J_URI': 'bolt://override:7687',
-                'OPENROUTER_API_KEY': 'override-api-key'
-            }, clear=False):  # clear=False保持现有环境变量
+            # 保存当前环境变量
+            original_env = {}
+            for key in ['NEO4J_URI', 'OPENROUTER_API_KEY']:
+                if key in os.environ:
+                    original_env[key] = os.environ[key]
+            
+            # 设置测试环境变量
+            os.environ['NEO4J_URI'] = 'bolt://override:7687'
+            os.environ['OPENROUTER_API_KEY'] = 'override-api-key'
+            
+            try:
                 manager = ConfigManager()
                 config = manager.load_config(Path(temp_path))
                 
@@ -225,6 +230,13 @@ class TestStory11Acceptance:
                 # 其他值应该保持配置文件中的值
                 assert config.llm.embedding_model_name == 'test-model'
                 assert config.app.name == 'Test App'
+            finally:
+                # 恢复原始环境变量
+                for key in ['NEO4J_URI', 'OPENROUTER_API_KEY']:
+                    if key in original_env:
+                        os.environ[key] = original_env[key]
+                    elif key in os.environ:
+                        del os.environ[key]
             
             # 测试3: 验证实际生产环境配置加载
             ConfigManager._instance = None

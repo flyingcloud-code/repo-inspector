@@ -8,7 +8,9 @@ from pathlib import Path
 
 from .data_models import (
     Function, FileInfo, ParsedCode, EmbeddingData, 
-    QueryResult, FunctionCallGraph, EmbeddingVector
+    QueryResult, FunctionCallGraph, EmbeddingVector,
+    FunctionCall, FallbackStats, FolderStructure, 
+    Documentation, AnalysisResult
 )
 
 
@@ -59,13 +61,38 @@ class IParser(ABC):
             List[Function]: 函数信息列表
         """
         pass
+    
+    @abstractmethod
+    def extract_function_calls(self, source_code: str, file_path: str) -> List[FunctionCall]:
+        """提取函数调用关系
+        
+        Args:
+            source_code: C源代码字符串
+            file_path: 文件路径（用于记录）
+            
+        Returns:
+            List[FunctionCall]: 函数调用关系列表
+            
+        Raises:
+            ParseError: 解析失败
+        """
+        pass
+    
+    @abstractmethod
+    def get_fallback_statistics(self) -> FallbackStats:
+        """获取fallback统计信息
+        
+        Returns:
+            FallbackStats: fallback使用统计
+        """
+        pass
 
 
 class IGraphStore(ABC):
     """图数据库存储接口
     
     负责将代码结构信息存储到Neo4j图数据库
-    简化版本 - 仅实现POC核心功能
+    扩展版本 - 支持函数调用关系分析
     """
     
     @abstractmethod
@@ -102,12 +129,97 @@ class IGraphStore(ABC):
             bool: 清空是否成功
         """
         pass
+    
+    # Story 2.1 新增方法
+    @abstractmethod
+    def store_call_relationship(self, caller: str, callee: str, call_type: str) -> bool:
+        """存储函数调用关系
+        
+        Args:
+            caller: 调用者函数名
+            callee: 被调用函数名
+            call_type: 调用类型 ('direct', 'pointer', 'member', 'recursive')
+            
+        Returns:
+            bool: 存储是否成功
+        """
+        pass
+    
+    @abstractmethod
+    def store_call_relationships_batch(self, call_relationships: List[FunctionCall]) -> bool:
+        """批量存储函数调用关系
+        
+        Args:
+            call_relationships: 函数调用关系列表
+            
+        Returns:
+            bool: 存储是否成功
+        """
+        pass
+    
+    @abstractmethod
+    def query_function_calls(self, function_name: str) -> List[str]:
+        """查询函数直接调用的其他函数
+        
+        Args:
+            function_name: 函数名
+            
+        Returns:
+            List[str]: 被调用函数名列表
+        """
+        pass
+    
+    @abstractmethod
+    def query_function_callers(self, function_name: str) -> List[str]:
+        """查询调用指定函数的其他函数
+        
+        Args:
+            function_name: 函数名
+            
+        Returns:
+            List[str]: 调用者函数名列表
+        """
+        pass
+    
+    @abstractmethod
+    def query_call_graph(self, root_function: str, max_depth: int = 5) -> Dict[str, Any]:
+        """生成函数调用图谱
+        
+        Args:
+            root_function: 根函数名
+            max_depth: 最大查询深度
+            
+        Returns:
+            Dict[str, Any]: 调用图谱数据结构
+        """
+        pass
+    
+    @abstractmethod
+    def find_unused_functions(self) -> List[str]:
+        """查找未被调用的函数
+        
+        Returns:
+            List[str]: 未使用函数名列表
+        """
+        pass
+    
+    @abstractmethod
+    def store_folder_structure(self, folder_structure: FolderStructure) -> bool:
+        """存储文件夹结构信息
+        
+        Args:
+            folder_structure: 文件夹结构数据
+            
+        Returns:
+            bool: 存储是否成功
+        """
+        pass
 
 
 class IVectorStore(ABC):
     """向量数据库存储接口
     
-    负责存储和检索代码的向量嵌入，支持repo级别扩展
+    负责存储和检索代码的向量嵌入，支持多模态分析
     """
     
     @abstractmethod
@@ -156,6 +268,44 @@ class IVectorStore(ABC):
             
         Returns:
             bool: 删除是否成功
+        """
+        pass
+    
+    # Story 2.1 新增方法
+    @abstractmethod
+    def store_function_embeddings(self, functions: List[Function]) -> bool:
+        """存储函数向量嵌入
+        
+        Args:
+            functions: 函数列表
+            
+        Returns:
+            bool: 存储是否成功
+        """
+        pass
+    
+    @abstractmethod
+    def store_documentation_embeddings(self, documentation: Documentation) -> bool:
+        """存储文档向量嵌入
+        
+        Args:
+            documentation: 文档信息
+            
+        Returns:
+            bool: 存储是否成功
+        """
+        pass
+    
+    @abstractmethod
+    def semantic_search(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
+        """语义搜索
+        
+        Args:
+            query: 查询文本
+            n_results: 返回结果数量
+            
+        Returns:
+            List[Dict]: 搜索结果列表
         """
         pass
 
@@ -261,14 +411,14 @@ class IChatBot(ABC):
 
 
 class ICodeQAService(ABC):
-    """代码问答服务接口 (Story 1.4简化设计)
+    """代码问答服务接口
     
-    统一处理向量嵌入、存储和问答功能，遵循KISS原则
+    整合所有组件，提供统一的问答服务
     """
     
     @abstractmethod
     def initialize(self) -> bool:
-        """初始化所有组件 (Chroma + jina-embeddings + OpenRouter)
+        """初始化服务
         
         Returns:
             bool: 初始化是否成功
@@ -277,10 +427,168 @@ class ICodeQAService(ABC):
     
     @abstractmethod
     def embed_and_store_code(self, parsed_code: ParsedCode) -> bool:
-        """代码向量化并存储到Chroma
+        """嵌入并存储代码
         
         Args:
-            parsed_code: 解析后的代码对象
+            parsed_code: 解析后的代码
+            
+        Returns:
+            bool: 处理是否成功
+        """
+        pass
+    
+    @abstractmethod
+    def ask_question(self, question: str) -> str:
+        """询问关于代码的问题
+        
+        Args:
+            question: 用户问题
+            
+        Returns:
+            str: 答案
+        """
+        pass
+
+
+# Story 2.1 新增接口
+
+class IMultiModalAnalysisStrategy(ABC):
+    """多路分析策略接口
+    
+    整合Tree-sitter、Neo4j、Chroma和文档分析的多路分析架构
+    """
+    
+    @abstractmethod
+    def analyze_repository(self, repo_path: Path) -> AnalysisResult:
+        """分析代码仓库
+        
+        Args:
+            repo_path: 仓库路径
+            
+        Returns:
+            AnalysisResult: 多路分析结果
+        """
+        pass
+    
+    @abstractmethod
+    def analyze_folder_structure(self, repo_path: Path) -> FolderStructure:
+        """分析文件夹结构
+        
+        Args:
+            repo_path: 仓库路径
+            
+        Returns:
+            FolderStructure: 文件夹结构信息
+        """
+        pass
+    
+    @abstractmethod
+    def extract_documentation(self, repo_path: Path) -> Documentation:
+        """提取文档信息
+        
+        Args:
+            repo_path: 仓库路径
+            
+        Returns:
+            Documentation: 文档信息
+        """
+        pass
+    
+    @abstractmethod
+    def structured_analysis(self, repo_path: Path) -> List[Function]:
+        """结构化代码分析
+        
+        Args:
+            repo_path: 仓库路径
+            
+        Returns:
+            List[Function]: 函数列表
+        """
+        pass
+    
+    @abstractmethod
+    def semantic_analysis(self, repo_path: Path) -> List[EmbeddingData]:
+        """语义向量分析
+        
+        Args:
+            repo_path: 仓库路径
+            
+        Returns:
+            List[EmbeddingData]: 向量嵌入列表
+        """
+        pass
+
+
+class IRAGRetrievalStrategy(ABC):
+    """RAG召回策略接口
+    
+    实现混合召回策略，结合语义和结构化检索
+    """
+    
+    @abstractmethod
+    def retrieve_context(self, query: str) -> str:
+        """检索上下文信息
+        
+        Args:
+            query: 查询文本
+            
+        Returns:
+            str: 检索到的上下文
+        """
+        pass
+    
+    @abstractmethod
+    def semantic_retrieval(self, query: str, n_results: int = 3) -> List[Dict[str, Any]]:
+        """语义检索
+        
+        Args:
+            query: 查询文本
+            n_results: 返回结果数量
+            
+        Returns:
+            List[Dict]: 语义检索结果
+        """
+        pass
+    
+    @abstractmethod
+    def structural_retrieval(self, query: str) -> List[Dict[str, Any]]:
+        """结构化检索
+        
+        Args:
+            query: 查询文本
+            
+        Returns:
+            List[Dict]: 结构化检索结果
+        """
+        pass
+    
+    @abstractmethod
+    def merge_retrieval_results(self, semantic_results: List[Dict], 
+                              structural_results: List[Dict]) -> str:
+        """融合检索结果
+        
+        Args:
+            semantic_results: 语义检索结果
+            structural_results: 结构化检索结果
+            
+        Returns:
+            str: 融合后的上下文
+        """
+        pass
+
+
+class IMetaDataStore(ABC):
+    """元数据存储接口
+    
+    用于存储fallback统计、性能指标等元数据信息
+    """
+    
+    @abstractmethod
+    def store_fallback_stats(self, stats: FallbackStats) -> bool:
+        """存储fallback统计信息
+        
+        Args:
+            stats: fallback统计数据
             
         Returns:
             bool: 存储是否成功
@@ -288,13 +596,31 @@ class ICodeQAService(ABC):
         pass
     
     @abstractmethod
-    def ask_question(self, question: str) -> str:
-        """基于向量搜索回答问题
+    def store_performance_metrics(self, metrics: Dict[str, Any]) -> bool:
+        """存储性能指标
         
         Args:
-            question: 用户问题
+            metrics: 性能指标数据
             
         Returns:
-            str: 回答结果
+            bool: 存储是否成功
+        """
+        pass
+    
+    @abstractmethod
+    def get_fallback_report(self) -> Dict[str, Any]:
+        """获取fallback使用报告
+        
+        Returns:
+            Dict[str, Any]: fallback报告数据
+        """
+        pass
+    
+    @abstractmethod
+    def get_performance_summary(self) -> Dict[str, Any]:
+        """获取性能总结
+        
+        Returns:
+            Dict[str, Any]: 性能总结数据
         """
         pass 

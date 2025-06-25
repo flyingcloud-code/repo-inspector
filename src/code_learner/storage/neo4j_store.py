@@ -239,6 +239,44 @@ class Neo4jGraphStore(IGraphStore):
                 logger.debug("No functions to create for this file")
             
             logger.debug(f"✅ Transaction completed successfully for file: {file_path}")
+            
+            # 3. 存储函数调用关系 (Story 2.1.3)
+            if parsed_code.call_relationships:
+                logger.debug(f"Step 3: Creating {len(parsed_code.call_relationships)} CALLS relationships")
+                
+                calls_data = []
+                for call in parsed_code.call_relationships:
+                    call_data = {
+                        'caller': call.caller_name,
+                        'callee': call.callee_name,
+                        'call_type': call.call_type,
+                        'line_no': call.line_number,
+                        'context': call.context
+                    }
+                    calls_data.append(call_data)
+                    logger.debug(f"Prepared call relationship: {call.caller_name} -> {call.callee_name} ({call.call_type})")
+                
+                # 批量创建调用关系
+                calls_query = """
+                UNWIND $calls as call
+                MERGE (caller:Function {name: call.caller})
+                MERGE (callee:Function {name: call.callee})
+                MERGE (caller)-[rel:CALLS]->(callee)
+                SET rel.call_type = call.call_type,
+                    rel.line_no = call.line_no,
+                    rel.context = call.context,
+                    rel.updated = datetime()
+                RETURN caller.name as caller_name, callee.name as callee_name
+                """
+                
+                logger.debug(f"Executing calls query with {len(calls_data)} relationships")
+                calls_result = tx.run(calls_query, calls=calls_data)
+                
+                created_calls = [(record["caller_name"], record["callee_name"]) for record in calls_result]
+                logger.debug(f"Created call relationships: {created_calls}")
+            else:
+                logger.debug("No call relationships to create for this file")
+            
             return True
             
         except Exception as e:
@@ -361,4 +399,209 @@ class Neo4jGraphStore(IGraphStore):
     def __exit__(self, exc_type, exc_val, exc_tb):
         """上下文管理器出口"""
         logger.debug(f"Exiting Neo4jGraphStore context (exc_type: {exc_type})")
-        self.close() 
+        self.close()
+
+    # Story 2.1 新增方法 - 占位实现 (将在Story 2.1.5中正式实现)
+    
+    def store_call_relationship(self, caller: str, callee: str, call_type: str) -> bool:
+        """存储函数调用关系 - 占位实现
+        
+        Args:
+            caller: 调用者函数名
+            callee: 被调用函数名  
+            call_type: 调用类型
+            
+        Returns:
+            bool: 存储是否成功
+            
+        Raises:
+            NotImplementedError: 功能将在Story 2.1.5中实现
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+
+        if not caller or not callee:
+            raise StorageError("invalid_params", "caller and callee must be non-empty")
+
+        try:
+            with self.driver.session() as session:
+                query = (
+                    "MERGE (caller:Function {name:$caller})\n"
+                    "MERGE (callee:Function {name:$callee})\n"
+                    "MERGE (caller)-[rel:CALLS]->(callee)\n"
+                    "SET rel.call_type = $call_type, rel.updated = datetime()"
+                )
+                session.run(query, caller=caller, callee=callee, call_type=call_type)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to store CALLS relationship {caller}->{callee}: {e}")
+            raise StorageError("call_relationship", str(e))
+    
+    def store_call_relationships_batch(self, call_relationships) -> bool:
+        """批量存储函数调用关系 - 占位实现
+        
+        Args:
+            call_relationships: 函数调用关系列表
+            
+        Returns:
+            bool: 存储是否成功
+            
+        Raises:
+            NotImplementedError: 功能将在Story 2.1.5中实现
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+
+        if not call_relationships:
+            return True
+
+        try:
+            with self.driver.session() as session:
+                batch_query = (
+                    "UNWIND $rels as rel\n"
+                    "MERGE (caller:Function {name: rel.caller})\n"
+                    "MERGE (callee:Function {name: rel.callee})\n"
+                    "MERGE (caller)-[r:CALLS]->(callee)\n"
+                    "SET r.call_type = rel.call_type, r.updated = datetime()"
+                )
+                rel_dicts = [
+                    {
+                        "caller": r.caller_name,
+                        "callee": r.callee_name,
+                        "call_type": r.call_type,
+                    }
+                    for r in call_relationships
+                ]
+                session.run(batch_query, rels=rel_dicts)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to batch store call relationships: {e}")
+            raise StorageError("call_relationship_batch", str(e))
+    
+    def query_function_calls(self, function_name: str):
+        """查询函数直接调用的其他函数 - 占位实现
+        
+        Args:
+            function_name: 函数名
+            
+        Returns:
+            List[str]: 被调用函数名列表
+            
+        Raises:
+            NotImplementedError: 功能将在Story 2.1.5中实现
+        """
+        raise NotImplementedError("query_function_calls will be implemented in Story 2.1.5")
+    
+    def query_function_callers(self, function_name: str):
+        """查询调用指定函数的其他函数 - 占位实现
+        
+        Args:
+            function_name: 函数名
+            
+        Returns:
+            List[str]: 调用者函数名列表
+            
+        Raises:
+            NotImplementedError: 功能将在Story 2.1.5中实现
+        """
+        raise NotImplementedError("query_function_callers will be implemented in Story 2.1.5")
+    
+    def query_call_graph(self, root_function: str, max_depth: int = 5):
+        """生成函数调用图谱
+        
+        Args:
+            root_function: 根函数名
+            max_depth: 最大查询深度
+            
+        Returns:
+            Dict[str, Any]: 调用图谱数据结构 {nodes: [...], edges: [...]}
+            
+        Raises:
+            StorageError: 查询失败时抛出异常
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+
+        if not root_function.strip():
+            raise StorageError("invalid_params", "root_function must be non-empty")
+
+        try:
+            with self.driver.session() as session:
+                # 使用可变长度路径查询调用图
+                # 注意：不能在MATCH模式中使用参数，需要字符串拼接
+                query = f"""
+                MATCH path = (root:Function {{name: $root_function}})-[:CALLS*1..{max_depth}]->(target:Function)
+                WITH nodes(path) as path_nodes, relationships(path) as path_rels
+                UNWIND path_nodes as node
+                WITH COLLECT(DISTINCT {{id: node.name, name: node.name, file_path: node.file_path}}) as nodes,
+                     path_rels
+                UNWIND path_rels as rel
+                WITH nodes, 
+                     COLLECT(DISTINCT {{
+                         source: startNode(rel).name, 
+                         target: endNode(rel).name,
+                         call_type: rel.call_type,
+                         line_no: rel.line_no
+                     }}) as edges
+                RETURN nodes, edges
+                """
+                
+                result = session.run(query, root_function=root_function)
+                record = result.single()
+                
+                if record:
+                    nodes = record["nodes"] or []
+                    edges = record["edges"] or []
+                else:
+                    # 如果没有找到调用路径，至少返回根节点
+                    root_query = "MATCH (f:Function {name: $root_function}) RETURN f"
+                    root_result = session.run(root_query, root_function=root_function)
+                    root_record = root_result.single()
+                    
+                    if root_record:
+                        root_node = root_record["f"]
+                        nodes = [{
+                            "id": root_node["name"],
+                            "name": root_node["name"],
+                            "file_path": root_node.get("file_path", "unknown")
+                        }]
+                        edges = []
+                    else:
+                        nodes = []
+                        edges = []
+                
+                return {
+                    "nodes": nodes,
+                    "edges": edges,
+                    "root": root_function,
+                    "max_depth": max_depth
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to query call graph for {root_function}: {e}")
+            raise StorageError("call_graph_query", str(e))
+    
+    def find_unused_functions(self):
+        """查找未被调用的函数 - 占位实现
+        
+        Returns:
+            List[str]: 未使用函数名列表
+            
+        Raises:
+            NotImplementedError: 功能将在Story 2.1.5中实现
+        """
+        raise NotImplementedError("find_unused_functions will be implemented in Story 2.1.5")
+    
+    def store_folder_structure(self, folder_structure) -> bool:
+        """存储文件夹结构信息 - 占位实现
+        
+        Args:
+            folder_structure: 文件夹结构数据
+            
+        Returns:
+            bool: 存储是否成功
+            
+        Raises:
+            NotImplementedError: 功能将在Story 2.1.5中实现
+        """
+        raise NotImplementedError("store_folder_structure will be implemented in Story 2.1.5") 

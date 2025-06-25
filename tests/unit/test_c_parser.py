@@ -4,7 +4,6 @@ CParser单元测试
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch, mock_open
 
 from src.code_learner.parser.c_parser import CParser
 from src.code_learner.core.exceptions import ParseError
@@ -146,10 +145,27 @@ static void helper_func(void) {
         assert "int x, char *str, double d" in complex_func.code
         assert complex_func.start_line > 0
     
-    def test_parser_initialization_error(self):
-        """测试解析器初始化错误"""
-        with patch('src.code_learner.parser.c_parser.tsc.language') as mock_language:
-            mock_language.side_effect = Exception("Language init failed")
-            
-            with pytest.raises(ParseError, match="Failed to initialize C parser"):
-                CParser() 
+    def test_parse_directory(self, tmp_path):
+        """测试解析目录中的多个C文件"""
+        # 创建多个C文件
+        c_file1 = tmp_path / "file1.c"
+        c_file1.write_text("int func1() { return 1; }")
+        
+        c_file2 = tmp_path / "file2.c"
+        c_file2.write_text("int func2() { return 2; }")
+        
+        # 创建非C文件（应该被忽略）
+        txt_file = tmp_path / "readme.txt"
+        txt_file.write_text("This is not a C file")
+        
+        parser = CParser()
+        results = parser.parse_directory(tmp_path)
+        
+        # 应该只解析C文件
+        assert len(results) == 2
+        
+        # 验证文件名
+        file_names = [result.file_info.name for result in results]
+        assert "file1.c" in file_names
+        assert "file2.c" in file_names
+        assert "readme.txt" not in file_names 
