@@ -1,0 +1,10 @@
+{
+  "export_time": "2025-06-26 23:45:02",
+  "project": "tests/fixtures",
+  "export_format": "json",
+  "included_types": "all",
+  "files": [
+    "opensbi.calls.json",
+    "opensbi.deps.json"
+  ]
+}

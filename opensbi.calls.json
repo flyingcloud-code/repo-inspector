@@ -1,0 +1,32 @@
+{
+  "nodes": [
+    {
+      "id": "main",
+      "file_path": "tests/fixtures/hello.c",
+      "name": "main"
+    },
+    {
+      "id": "hello",
+      "file_path": "tests/fixtures/hello.c",
+      "name": "hello"
+    }
+  ],
+  "edges": [
+    {
+      "line_no": 8,
+      "source": "main",
+      "call_type": "direct",
+      "target": "hello"
+    }
+  ],
+  "stats": {
+    "node_count": 2,
+    "edge_count": 1,
+    "max_depth": 3,
+    "root_function": "main"
+  },
+  "metadata": {
+    "format": "call_graph_json",
+    "version": "1.0"
+  }
+}

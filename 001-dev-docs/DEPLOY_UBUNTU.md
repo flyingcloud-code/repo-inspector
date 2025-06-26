@@ -98,6 +98,7 @@ except Exception as e:
 "
 
 # 验证jina-embeddings模型 (首次运行会下载模型)
+export HF_ENDPOINT="https://hf-mirror.com"
 python -c "
 from sentence_transformers import SentenceTransformer
 print('✅ sentence-transformers可用')

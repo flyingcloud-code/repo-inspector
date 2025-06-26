@@ -1,0 +1,39 @@
+{
+  "file_dependencies": [
+    {
+      "source_file": "tests/fixtures/hello.c",
+      "target_file": "stdio.h",
+      "dependency_type": "include",
+      "is_system": true,
+      "line_number": 1,
+      "context": "#include <stdio.h>"
+    },
+    {
+      "source_file": "tests/fixtures/complex.c",
+      "target_file": "stdio.h",
+      "dependency_type": "include",
+      "is_system": true,
+      "line_number": 1,
+      "context": "#include <stdio.h>"
+    },
+    {
+      "source_file": "tests/fixtures/complex.c",
+      "target_file": "stdlib.h",
+      "dependency_type": "include",
+      "is_system": true,
+      "line_number": 2,
+      "context": "#include <stdlib.h>"
+    }
+  ],
+  "module_dependencies": [],
+  "circular_dependencies": [],
+  "modularity_score": 1.0,
+  "stats": {
+    "file_dependencies_count": 3,
+    "module_dependencies_count": 0,
+    "circular_dependencies_count": 0,
+    "system_headers_count": 3,
+    "project_headers_count": 0,
+    "modularity_score": 1.0
+  }
+}
