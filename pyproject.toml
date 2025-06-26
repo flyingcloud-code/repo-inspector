@@ -1,13 +1,14 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "code-repo-learner"
-version = "0.1.0"
-description = "C语言智能代码分析调试工具"
+version = "0.2.0"
+description = "A tool for learning and analyzing C codebases"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.8"
+license = {text = "MIT"}
 authors = [
     {name = "Code Repo Learner Team"}
 ]
@@ -21,15 +22,16 @@ classifiers = [
 ]
 
 dependencies = [
+    "tree-sitter>=0.20.0",
+    "tree-sitter-c>=0.20.0",
     "pyyaml>=6.0",
-    "tree-sitter==0.21.3",
-    "tree-sitter-c==0.21.3",
-    "chromadb>=0.4.0",
-    "sentence-transformers>=2.2.0",
-    "neo4j>=5.0.0",
-    "click>=8.0.0",
+    "neo4j>=5.25.0",
+    "chromadb>=1.0.13",
+    "sentence-transformers>=3.0.0",
+    "requests>=2.31.0",
+    "tqdm>=4.66.0",
+    "colorama>=0.4.6",
     "python-dotenv>=1.0.0",
-    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
@@ -42,7 +44,10 @@ dev = [
 ]
 
 [project.scripts]
-code-learner = "code_learner.cli.main:main"
+code-repo-learn = "code_learner.cli.cli:main"
+call-graph = "code_learner.cli.call_graph_cli:main"
+dependency-graph = "code_learner.cli.dependency_cli:main"
+code-learner = "code_learner.cli.code_analyzer_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

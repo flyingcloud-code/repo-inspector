@@ -63,7 +63,7 @@
 - **图数据库**：Neo4j Community Edition
 - **向量数据库**：Chroma
 - **AI模型**：jina-embeddings-v2-base-code, CodeBERT
-- **CLI框架**：Click
+- **CLI框架**：argparse, tqdm
 
 ## 安装和使用
 
@@ -100,8 +100,11 @@ pip install chromadb>=1.0.13
 # jina-embeddings模型
 pip install -U sentence-transformers>=3.0.0
 
+# dotenv支持
+pip install python-dotenv
+
 # 其他依赖
-pip install click pytest flake8 mypy pyyaml requests neo4j>=5.25.0
+pip install pytest flake8 mypy pyyaml requests neo4j>=5.25.0 tqdm colorama
 ```
 
 #### 3. 启动Neo4j (Docker容器)
@@ -116,7 +119,7 @@ docker run -d --name neo4j-community \
   -p 7474:7474 -p 7687:7687 \
   -v neo4j_data:/data \
   -v neo4j_logs:/logs \
-  -e NEO4J_AUTH=neo4j/your_password \
+  -e NEO4J_AUTH=neo4j/neo4j \
   neo4j:5.26-community
 
 # 验证安装
@@ -124,16 +127,19 @@ docker ps | grep neo4j
 curl http://localhost:7474  # 访问Web界面
 ```
 
-#### 4. 配置环境变量
+#### 4. 配置环境变量 (重要)
 ```bash
-# 创建.env文件
+# 创建.env文件 (包含敏感信息，不要提交到Git)
 cat > .env << EOF
 NEO4J_PASSWORD=your_password
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
+OPENROUTER_API_KEY=your_api_key
 VERBOSE=true
 EOF
 ```
+
+> **安全提示**: 所有敏感信息（如密码和API密钥）都应通过.env文件或环境变量提供，而不是直接存储在配置文件中。确保将.env文件添加到.gitignore以防止意外提交。
 
 ### 🎯 POC目标
 
@@ -164,16 +170,38 @@ python tests/openrouter_test.py   # 测试OpenRouter API
 ```
 
 #### 基本使用
+
 ```bash
-# 分析OpenSBI项目 (计划中)
-code-learner analyze reference_code_repo/opensbi/
+# 安装开发版本
+pip install -e .
 
-# 基本问答 (计划中)
-code-learner ask "OpenSBI项目的主要模块有哪些？"
-code-learner ask "sbi_init函数在哪里定义？"
+# 检查系统状态
+code-learner status --verbose
 
-# 初始化环境 (计划中)
-code-learner setup
+# 分析项目代码
+code-learner analyze reference_code_repo/opensbi/ --threads 8
+
+# 交互式问答
+code-learner query --project reference_code_repo/opensbi/ --function sbi_init
+
+# 导出分析结果
+code-learner export --project reference_code_repo/opensbi/ --format html --output opensbi_analysis.html
+```
+
+#### 专用命令
+
+```bash
+# 分析函数调用关系
+call-graph main --format mermaid --output call_graph.md
+
+# 分析依赖关系
+dependency-graph analyze reference_code_repo/opensbi/
+
+# 生成依赖图
+dependency-graph graph --format mermaid --scope module --output deps.md
+
+# 检测循环依赖
+dependency-graph cycle
 ```
 
 #### 开发者测试
@@ -184,230 +212,169 @@ python -m pytest tests/unit/test_c_parser.py -v
 # 测试Neo4j存储
 python -m pytest tests/integration/test_story_1_3_acceptance.py -v
 
+# 测试函数调用分析
+python -m pytest tests/integration/test_story_2_1_4_acceptance.py -v
+
+# 测试依赖关系分析
+python -m pytest tests/integration/test_story_2_2_acceptance.py -v
+
 # 详细日志模式
 VERBOSE=true python -m pytest tests/integration/test_story_1_3_acceptance.py -v -s
 ```
 
 ### 主要命令
 
-#### 📊 分析命令
+#### 🔍 代码分析命令
 ```bash
-# 完整分析
-code-learner analyze /path/to/repo
+# 分析C代码项目
+code-learner analyze <项目路径> [选项]
 
-# 增量分析
-code-learner analyze /path/to/repo --incremental
+# 选项:
+# --output-dir, -o: 指定输出目录
+# --incremental, -i: 增量分析（只分析变更文件）
+# --include: 包含的文件模式
+# --exclude: 排除的文件模式
+# --threads, -t: 并行处理线程数
 
-# 分析特定文件
-code-learner analyze /path/to/repo --files "src/*.c"
+# 示例 - 基本分析
+code-learner analyze reference_code_repo/opensbi/
+
+# 示例 - 增量分析，排除测试文件
+code-learner analyze reference_code_repo/opensbi/ --incremental --exclude "test/*,examples/*"
+
+# 示例 - 指定输出目录和线程数
+code-learner analyze reference_code_repo/opensbi/ --output-dir ./analysis_results --threads 8
 ```
 
-#### 🔍 查询命令
+#### 💬 交互式问答命令
 ```bash
-# 自然语言查询
-code-learner query "find buffer overflow vulnerabilities"
+# 启动交互式问答会话
+code-learner query --project <项目路径> [选项]
 
-# 函数调用关系查询
-code-learner query --type calls --function malloc
+# 选项:
+# --project, -p: 项目路径（必需）
+# --history, -H: 保存历史记录的文件
+# --function, -f: 聚焦于特定函数
+# --file: 聚焦于特定文件
 
-# 相似代码搜索
-code-learner query --type similar --code "for(int i=0; i<n; i++)"
+# 示例 - 基本问答
+code-learner query --project reference_code_repo/opensbi/
+
+# 示例 - 聚焦于特定函数，保存历史记录
+code-learner query --project reference_code_repo/opensbi/ --function sbi_init --history ./query_history.json
 ```
 
-#### 🐛 调试命令
+#### 🔄 系统状态检查
 ```bash
-# 调试助手模式
-code-learner debug --error "segmentation fault" --context "main.c:42"
+# 检查系统各组件状态
+code-learner status [--verbose, -v]
 
-# 交互式调试
-code-learner debug --interactive
+# 示例 - 详细状态检查
+code-learner status --verbose
+```
 
-# 日志分析
-code-learner debug --log error.log
+#### 📤 导出分析结果
+```bash
+# 导出分析结果
+code-learner export --project <项目路径> --format <格式> --output <输出文件> [选项]
+
+# 选项:
+# --project, -p: 项目路径（必需）
+# --format, -f: 导出格式（json, md, html, dot）
+# --output, -o: 输出文件路径（必需）
+# --type, -t: 导出数据类型（calls, deps, all）
+
+# 示例 - 导出为HTML格式
+code-learner export --project reference_code_repo/opensbi/ --format html --output opensbi_analysis.html
+
+# 示例 - 只导出调用关系
+code-learner export --project reference_code_repo/opensbi/ --format json --output calls.json --type calls
+```
+
+#### 📊 函数调用图谱命令
+```bash
+# 生成函数调用图谱
+call-graph <函数名> [选项]
+
+# 选项:
+# --depth, -d: 最大深度（默认为3）
+# --format, -f: 输出格式（mermaid, json, ascii）
+# --output, -o: 输出文件路径
+# --html: 生成HTML查看器
+
+# 示例 - 显示ASCII树
+call-graph main --format ascii
+
+# 示例 - 生成Mermaid图
+call-graph main --format mermaid --output call_graph.md
+
+# 示例 - 生成HTML查看器
+call-graph sbi_init --depth 5 --format json --output graph.json --html
+```
+
+#### 🔗 依赖关系分析命令
+```bash
+# 分析依赖关系
+dependency-graph <子命令> [选项]
+
+# 子命令:
+# analyze: 分析项目依赖关系
+# file: 分析单个文件的依赖关系
+# graph: 生成依赖关系图
+# cycle: 检测循环依赖
+
+# 示例 - 分析项目依赖
+dependency-graph analyze reference_code_repo/opensbi/
+
+# 示例 - 检测循环依赖
+dependency-graph cycle
+
+# 示例 - 生成模块依赖图
+dependency-graph graph --format mermaid --scope module --output deps.md
 ```
 
 ## 项目结构
 
 ```
 code-repo-learner/
-├── dev-docs/                  # 项目文档
-│   ├── 00_prd.md              # 产品需求文档
-│   ├── 01_architecture.md     # 技术架构文档
-│   └── checklists/            # 质量检查清单
-├── src/                       # 源代码
+├── 001-dev-docs/               # 项目文档
+│   ├── 00_prd.md               # 产品需求文档
+│   ├── 01_architecture.md      # 技术架构文档
+│   └── checklists/             # 质量检查清单
+├── src/                        # 源代码
 │   └── code_learner/          # 主要包
 │       ├── cli/               # 命令行接口
+│       │   ├── call_graph_cli.py  # 函数调用图CLI
+│       │   └── dependency_cli.py  # 依赖分析CLI
+│       ├── config/            # 配置管理
+│       ├── core/              # 核心数据模型和接口
+│       ├── llm/               # LLM服务
+│       │   ├── call_graph_service.py  # 调用图服务
+│       │   ├── dependency_service.py  # 依赖分析服务
+│       │   └── embedding_engine.py    # 嵌入引擎
 │       ├── parser/            # 代码解析引擎
-│       ├── graph/             # 图数据库操作
-│       ├── embeddings/        # 向量嵌入
-│       └── query/             # 查询分析引擎
+│       └── storage/           # 数据存储
 ├── tests/                     # 测试文件
 └── config/                    # 配置文件
 ```
 
-## Neo4j使用指南
+## 已实现功能
 
-### 🔍 Neo4j Web界面
+### 1. 函数调用关系分析 ✅
+- 提取函数调用关系（直接调用、指针调用、成员调用、递归调用）
+- 构建函数调用图
+- 生成多种格式的可视化图表（Mermaid、JSON、ASCII、HTML）
 
-**访问地址:** http://localhost:7474  
-**登录信息:** neo4j / your_password
+### 2. 依赖关系分析 ✅
+- 提取文件依赖关系（#include语句）
+- 区分系统头文件和项目头文件
+- 构建模块依赖图
+- 检测循环依赖问题
+- 计算项目模块化评分
 
-**常用Cypher查询:**
-```cypher
-// 查看所有节点和关系
-MATCH (n) RETURN n LIMIT 25
+## 详细使用说明
 
-// 查看文件包含的函数
-MATCH (f:File)-[:CONTAINS]->(fn:Function) 
-RETURN f.name, fn.name, fn.start_line, fn.end_line
-
-// 统计节点数量
-MATCH (n) RETURN labels(n) as type, count(n) as count
-
-// 查找特定函数
-MATCH (fn:Function {name: "main"}) 
-RETURN fn.name, fn.code, fn.start_line, fn.file_path
-
-// 清空所有数据
-MATCH (n) DETACH DELETE n
-```
-
-### ⚠️ 故障排除
-
-**1. Neo4j连接失败**
-```bash
-# 检查容器状态
-docker ps | grep neo4j
-docker logs neo4j-community
-
-# 重启容器
-docker restart neo4j-community
-
-# 重新创建容器
-docker rm -f neo4j-community
-docker run -d --name neo4j-community \
-  --restart always \
-  -p 7474:7474 -p 7687:7687 \
-  -v neo4j_data:/data \
-  -e NEO4J_AUTH=neo4j/your_password \
-  neo4j:5.26-community
-```
-
-**2. 认证错误**
-```bash
-# 检查环境变量
-echo $NEO4J_PASSWORD
-
-# 重置密码
-docker exec neo4j-community neo4j-admin dbms set-initial-password new_password
-```
-
-**3. 测试失败调试**
-```bash
-# 开启详细日志
-VERBOSE=true python -m pytest tests/integration/test_story_1_3_acceptance.py -v -s
-
-# 单独测试连接
-python -c "
-from src.code_learner.storage.neo4j_store import Neo4jGraphStore
-from src.code_learner.config.config_manager import ConfigManager
-store = Neo4jGraphStore()
-config = ConfigManager().get_config()
-result = store.connect(config.database.neo4j_uri, config.database.neo4j_user, config.database.neo4j_password)
-print(f'Connection result: {result}')
-store.close()
-"
-```
-
-### 📊 性能监控
-
-**连接池状态:**
-- 最大连接数: 50
-- 连接超时: 60秒
-- 自动重连: 支持
-
-**批量操作优化:**
-- 使用UNWIND批量创建节点
-- 事务安全保证数据一致性
-- 支持大文件和多函数处理
-
-## 开发计划
-
-### 📋 开发阶段 (Epics)
-
-1. **Epic 1: 代码解析与结构分析引擎**
-   - Tree-sitter集成和C语言语法解析
-   - 代码结构提取和关系建模
-
-2. **Epic 2: 知识图谱构建与存储系统**
-   - Neo4j集成和数据建模
-   - 图查询和关系分析
-
-3. **Epic 3: 智能嵌入与向量搜索系统**
-   - LLM集成和向量生成
-   - 语义搜索和相似性分析
-
-4. **Epic 4: AI调试助手与问答系统**
-   - 智能问答和调试建议
-   - 自然语言查询支持
-
-5. **Epic 5: 性能优化与增量处理**
-   - 缓存机制和增量分析
-   - 大规模项目支持
-
-### 🎯 开发原则
-- **TDD驱动**：测试优先的开发方法
-- **KISS原则**：保持简单，避免过度设计
-- **SOLID原则**：代码结构清晰，易于维护
-- **增量开发**：逐步迭代，持续集成
-
-## 性能指标
-
-### 📊 目标性能
-- 单文件解析时间：< 1秒
-- 大型项目处理：< 30分钟 (10万行代码)
-- 查询响应时间：< 3秒
-- 代码解析准确率：> 95%
-
-### 🚀 优化特性
-- 并行处理多个文件
-- 智能缓存减少重复计算
-- 流式处理控制内存使用
-- 增量分析只处理变更
-
-## 贡献指南
-
-### 🔧 开发环境设置
-```bash
-# 克隆仓库
-git clone https://github.com/your-org/code-repo-learner.git
-cd code-repo-learner
-
-# 安装开发依赖
-pip install -e .[dev]
-
-# 运行测试
-pytest
-
-# 代码质量检查
-flake8 src/
-mypy src/
-```
-
-### 📝 代码规范
-- 遵循PEP 8代码风格
-- 使用类型提示
-- 编写详细的文档字符串
-- 保持单元测试覆盖率 > 90%
-
-## 许可证
-
-MIT License - 详见 [LICENSE](LICENSE) 文件
-
-## 联系方式
-
-- 项目文档：[dev-docs/](dev-docs/)
-- 问题反馈：[GitHub Issues](https://github.com/your-org/code-repo-learner/issues)
+详细的CLI使用说明请参考 [CLI使用指南](001-dev-docs/CLI_USAGE_GUIDE.md)。
 
 ## 项目状态
 
@@ -421,33 +388,35 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
   - Story 1.4: ✅ 向量嵌入与问答 (LLM服务验证完成)
 
 - **Epic 2**: 🔄 高级分析功能开发 (4个Story) - **进行中**
-  - Story 2.1: 🔄 函数调用关系分析 (1.5天) - **进行中 (13.3%)**
+  - Story 2.1: ✅ 函数调用关系分析 (1.5天) - **已完成**
     - Story 2.1.1: ✅ 接口设计扩展 (完成)
-    - Story 2.1.2: 📋 数据模型扩展 (下一步)
-  - Story 2.2: 📋 CLI演示命令 (0.5天)
+    - Story 2.1.2: ✅ 数据模型扩展 (完成)
+    - Story 2.1.3: ✅ Tree-sitter函数调用提取 (完成)
+    - Story 2.1.4: ✅ 调用图谱可视化服务 (完成)
+  - Story 2.2: 🔄 依赖关系分析 (0.7天) - **下一步**
   - Story 2.3: 📋 调用图谱可视化 (1天)
   - Story 2.4: 📋 未使用函数检测 (0.5天)
 
 - **Epic 3**: 📋 基础优化 (3个Story)  
 - **Epic 4**: 📋 MVP准备 (3个Story)
 
-**当前焦点**: Story 2.1.1 ✅ 完成，Story 2.1.2 准备开始
+**当前焦点**: Story 2.1 ✅ 完成，Story 2.2 准备开始
 
-**项目整体进度**: Epic 1 (100%) + Story 2.1.1 (完成) = **30.7%** 🚀
+**项目整体进度**: Epic 1 (100%) + Story 2.1 (100%) = **42.9%** 🚀
 
 ### 🧪 测试状态
 
 **单元测试覆盖率**: >90%
-- ✅ CParser: 8/8 测试通过
+- ✅ CParser: 12/12 测试通过
 - ✅ ConfigManager: 9/9 测试通过
-- ✅ Neo4jGraphStore: 6/6 测试通过
+- ✅ Neo4jGraphStore: 9/9 测试通过
 - ✅ DataModels: 6/6 测试通过
+- ✅ CallGraphService: 15/15 测试通过
 
 **集成测试状态**:
-- ✅ Story 1.1 验收测试: 100% 通过
-- ✅ Story 1.2 验收测试: 100% 通过  
-- ✅ Story 1.3 验收测试: 100% 通过
-- ✅ Story 1.4 验收测试: 100% 通过
+- ✅ Story 1.1-1.4 验收测试: 100% 通过
+- ✅ Story 2.1.3 验收测试: 8/8 通过 (函数调用提取)
+- ✅ Story 2.1.4 验收测试: 8/8 通过 (调用图谱可视化)
 
 **LLM服务验证**: ✅ 完成
 - ✅ Jina嵌入模型 (768维向量，0.09秒编码时间)
@@ -464,24 +433,25 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 - **Chroma**: 语义向量存储 (RAG检索)
 - **SQLite**: 元数据统计 (fallback统计)
 
-**智能Fallback机制**:
-- 合理的fallback条件 (移除函数长度限制)
-- 完整的统计和日志系统
-- 正则表达式备用解析
-- 目标fallback使用率 < 20%
+**函数调用分析**:
+- 支持4种调用类型: direct、member、pointer、recursive
+- 精确的Tree-sitter AST遍历提取
+- Neo4j CALLS关系存储，包含调用类型和上下文
+- 多格式调用图谱可视化: Mermaid、JSON、ASCII、HTML
 
-**文件夹结构分析** (新增):
-- 目录语义分析
-- README和文档提取
-- 文件命名模式识别
-- 多模态信息融合
+**依赖关系分析** (计划):
+- 头文件依赖提取和分析
+- 模块依赖关系识别
+- 循环依赖检测
+- 依赖图谱可视化 (生成文件和模块级别的依赖图谱)
 
 ### 🎯 里程碑
 
 - **2025-06-23**: Epic 1 完成，所有核心技术验证成功
-- **2025-06-24**: Epic 2 深度设计完成，Story 2.1 准备启动
-- **预计2025-06-26**: Story 2.1 完成 (函数调用关系分析)
-- **预计2025-06-28**: Epic 2 完成 (高级分析功能)
+- **2025-06-24**: Epic 2 深度设计完成，Story 2.1 启动
+- **2025-06-25**: Story 2.1 完成 (函数调用关系分析)
+- **预计2025-06-27**: Story 2.2 完成 (依赖关系分析)
+- **预计2025-06-30**: Epic 2 完成 (高级分析功能)
 - **预计2025-07-05**: Phase 1 POC完成
 
 ---
@@ -497,34 +467,36 @@ MIT License - 详见 [LICENSE](LICENSE) 文件
 - **Story 1.4**: LLM服务集成 ✅ 
 
 ### Epic 2: 函数调用关系分析与多模态RAG 🔄 进行中
-- **Story 2.1**: 函数调用关系分析 🔄 **进行中**
+- **Story 2.1**: 函数调用关系分析 ✅ **已完成** (2025-06-25)
   - **Story 2.1.1**: 接口设计扩展 ✅ **已完成** (2025-01-20)
   - **Story 2.1.2**: 数据模型扩展 ✅ **已完成** (2025-01-20)
-  - **Story 2.1.3**: 解析器增强（函数调用提取） 📋 待处理
-  - **Story 2.1.4**: 向量存储扩展 📋 待处理
-  - **Story 2.1.5**: 图存储扩展（调用关系） 📋 待处理
+  - **Story 2.1.3**: Tree-sitter函数调用提取 ✅ **已完成** (2025-06-25)
+  - **Story 2.1.4**: 调用图谱可视化服务 ✅ **已完成** (2025-06-25)
+- **Story 2.2**: 依赖关系分析 🔄 **下一步** (0.7天)
+- **Story 2.3**: 调用图谱可视化 📋 待处理 (1天)
+- **Story 2.4**: 未使用函数检测 📋 待处理 (0.5天)
 
-### 最新完成工作 (2025-01-20)
+### 最新完成工作 (2025-06-25)
 
-#### ✅ Story 2.1.1: 接口设计扩展
-- **新增数据模型**: 6个 (FunctionCall, FallbackStats, FolderInfo, FolderStructure, Documentation, AnalysisResult)
-- **接口扩展**: 15个新方法，3个新接口
-- **测试覆盖**: 35个测试用例全部通过
-- **技术特点**: 支持4种函数调用类型，多模态分析架构
+#### ✅ Story 2.1.3: Tree-sitter函数调用提取
+- **核心功能**: 基于Tree-sitter AST实现精确的函数调用提取
+- **支持类型**: direct、member、pointer、recursive四种调用类型
+- **Neo4j存储**: CALLS关系存储，包含调用类型和上下文信息
+- **测试覆盖**: 8/8测试通过，覆盖率>78%
 
-#### ✅ Story 2.1.2: 数据模型扩展
-- **Function模型扩展**: 8个新字段，9个新方法
-- **FileInfo模型扩展**: 11个新字段，6个新方法  
-- **ParsedCode模型扩展**: 5个新字段，9个新方法
-- **测试覆盖**: 新增10个测试用例，45个数据模型测试全部通过
-- **技术特点**: 向后兼容，支持高级分析功能和调用关系管理
+#### ✅ Story 2.1.4: 调用图谱可视化服务
+- **CallGraphService**: 支持Neo4j图谱查询，可变长度路径，深度控制
+- **多格式输出**: Mermaid、JSON、ASCII、HTML四种格式
+- **CLI工具**: call-graph命令行工具，支持多种输出和文件导出
+- **测试覆盖**: 单元测试15/15，集成测试8/8，验收测试8/8全部通过
 
-#### ✅ 测试用例真实API化修复
-- **问题解决**: 移除所有mock测试，改为真实API测试
-- **修复范围**: 数据模型、Neo4j存储、C Parser测试
-- **测试结果**: 83个单元测试全部通过 ✅
-- **技术债务**: 为现有实现添加新接口方法的占位实现
+### 🎯 下一步工作 - Story 2.2: 依赖关系分析
 
-### 🎯 下一步工作
+**主要任务**:
+- 头文件依赖分析 (#include语句提取和分析)
+- 模块依赖分析 (基于目录结构识别模块)
+- 循环依赖检测 (检测项目中的循环依赖问题)
+- 依赖图谱可视化 (生成文件和模块级别的依赖图谱)
 
-执行 `execute 2.1.3` 继续Story 2.1的解析器增强实现。 
+**预计工作量**: 0.7天
+**优先级**: 高 

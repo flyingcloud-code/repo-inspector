@@ -8,11 +8,16 @@ import logging
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-import chromadb
-from chromadb.config import Settings
+# 尝试导入 chromadb，如果不可用则直接抛出异常，要求在真实环境安装依赖
+try:
+    import chromadb  # type: ignore
+    from chromadb.config import Settings  # type: ignore
+    CHROMADB_AVAILABLE = True
+except ImportError as e:  # pragma: no cover
+    raise ImportError("chromadb library is required for ChromaVectorStore but is not installed. Please install 'chromadb' package.")
 
 from ..core.interfaces import IVectorStore
-from ..core.data_models import EmbeddingData, EmbeddingVector
+from ..core.data_models import EmbeddingData, EmbeddingVector, Function
 from ..core.exceptions import DatabaseConnectionError, QueryError
 from ..utils.logger import get_logger
 
@@ -64,7 +69,7 @@ class ChromaVectorStore(IVectorStore):
             
         except Exception as e:
             logger.error(f"❌ Chroma客户端初始化失败: {e}")
-            raise DatabaseConnectionError(f"Failed to initialize Chroma client: {str(e)}")
+            raise DatabaseConnectionError("chromadb", f"Failed to initialize Chroma client: {str(e)}")
     
     def create_collection(self, name: str) -> bool:
         """创建向量集合
@@ -76,7 +81,7 @@ class ChromaVectorStore(IVectorStore):
             bool: 创建是否成功
         """
         if not self.client:
-            raise DatabaseConnectionError("Chroma客户端未初始化")
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
         
         try:
             logger.info(f"创建向量集合: {name}")
@@ -110,7 +115,7 @@ class ChromaVectorStore(IVectorStore):
             
         except Exception as e:
             logger.error(f"❌ 集合创建失败 '{name}': {e}")
-            raise DatabaseConnectionError(f"Failed to create collection '{name}': {str(e)}")
+            raise DatabaseConnectionError("chromadb", f"Failed to create collection '{name}': {str(e)}")
     
     def add_embeddings(self, embeddings: List[EmbeddingData]) -> bool:
         """批量添加向量嵌入
@@ -128,8 +133,13 @@ class ChromaVectorStore(IVectorStore):
         try:
             logger.info(f"🚀 开始批量添加 {len(embeddings)} 个向量嵌入")
             
-            # 按集合分组（假设所有嵌入都添加到默认集合）
+            # 默认集合名称
             collection_name = "code_embeddings"
+            
+            # 如果调用方之前创建了集合且尚未创建默认集合，则使用现有集合
+            if collection_name not in self.collections and self.collections:
+                # 取第一个已存在的集合名称
+                collection_name = next(iter(self.collections.keys()))
             
             # 确保集合存在
             if collection_name not in self.collections:
@@ -158,7 +168,7 @@ class ChromaVectorStore(IVectorStore):
             
         except Exception as e:
             logger.error(f"❌ 批量添加失败: {e}")
-            raise DatabaseConnectionError(f"Failed to add embeddings: {str(e)}")
+            raise DatabaseConnectionError("chromadb", f"Failed to add embeddings: {str(e)}")
     
     def search_similar(self, query_vector: EmbeddingVector, top_k: int = 5, 
                       collection_name: str = "code_embeddings") -> List[Dict[str, Any]]:
@@ -173,7 +183,7 @@ class ChromaVectorStore(IVectorStore):
             List[Dict]: 相似结果列表
         """
         if not self.client:
-            raise DatabaseConnectionError("Chroma客户端未初始化")
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
         
         try:
             logger.info(f"🔍 开始语义搜索: top_k={top_k}, collection='{collection_name}'")
@@ -185,7 +195,7 @@ class ChromaVectorStore(IVectorStore):
                     collection = self.client.get_collection(collection_name)
                     self.collections[collection_name] = collection
                 except:
-                    raise QueryError(f"集合 '{collection_name}' 不存在")
+                    raise QueryError(collection_name, f"集合不存在")
             
             collection = self.collections[collection_name]
             
@@ -220,7 +230,7 @@ class ChromaVectorStore(IVectorStore):
             
         except Exception as e:
             logger.error(f"❌ 语义搜索失败: {e}")
-            raise QueryError(f"Vector search failed: {str(e)}")
+            raise QueryError(collection_name, f"Vector search failed: {str(e)}")
     
     def delete_collection(self, name: str) -> bool:
         """删除向量集合
@@ -232,7 +242,7 @@ class ChromaVectorStore(IVectorStore):
             bool: 删除是否成功
         """
         if not self.client:
-            raise DatabaseConnectionError("Chroma客户端未初始化")
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
         
         try:
             logger.info(f"删除向量集合: {name}")
@@ -249,7 +259,7 @@ class ChromaVectorStore(IVectorStore):
             
         except Exception as e:
             logger.error(f"❌ 集合删除失败 '{name}': {e}")
-            raise DatabaseConnectionError(f"Failed to delete collection '{name}': {str(e)}")
+            raise DatabaseConnectionError("chromadb", f"Failed to delete collection '{name}': {str(e)}")
     
     def get_collection_info(self, name: str) -> Dict[str, Any]:
         """获取集合信息
@@ -261,7 +271,7 @@ class ChromaVectorStore(IVectorStore):
             Dict: 集合信息
         """
         if not self.client:
-            raise DatabaseConnectionError("Chroma客户端未初始化")
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
         
         try:
             if name not in self.collections:
@@ -287,7 +297,7 @@ class ChromaVectorStore(IVectorStore):
             List[str]: 集合名称列表
         """
         if not self.client:
-            raise DatabaseConnectionError("Chroma客户端未初始化")
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
         
         try:
             collections = self.client.list_collections()
@@ -296,3 +306,65 @@ class ChromaVectorStore(IVectorStore):
         except Exception as e:
             logger.error(f"列出集合失败: {e}")
             return [] 
+    
+    def semantic_search(self, query: str, n_results: int = 5) -> List[Dict[str, Any]]:
+        """语义搜索
+
+        将查询文本转换为向量后执行相似度搜索。
+        """
+        # 延迟导入，避免循环依赖
+        from .embedding_engine import JinaEmbeddingEngine  # noqa
+
+        engine = JinaEmbeddingEngine()
+        if not engine.model:
+            engine.load_model("jinaai/jina-embeddings-v2-base-code")
+
+        query_vec = engine.encode_text(query)
+        return self.search_similar(query_vec, top_k=n_results)
+    
+    # -------------------------- Story 2.1 额外接口 --------------------------
+    def store_function_embeddings(self, functions: List[Function]) -> bool:  # type: ignore
+        """存储函数级向量嵌入（简化实现）"""
+        if not functions:
+            return True
+        try:
+            from .embedding_engine import JinaEmbeddingEngine  # noqa
+            engine = JinaEmbeddingEngine()
+            if not engine.model:
+                engine.load_model("jinaai/jina-embeddings-v2-base-code")
+            embeddings: List[EmbeddingData] = []
+            for func in functions:
+                emb = engine.encode_function(func)
+                embeddings.append(emb)
+            return self.add_embeddings(embeddings)
+        except Exception as e:
+            logger.error(f"store_function_embeddings failed: {e}")
+            return False
+    
+    def store_documentation_embeddings(self, documentation):  # type: ignore
+        """存储文档向量嵌入（简化实现）"""
+        try:
+            texts: List[str] = []
+            if hasattr(documentation, "get_all_text"):
+                texts.append(documentation.get_all_text())
+            if not texts:
+                return True
+            from .embedding_engine import JinaEmbeddingEngine  # noqa
+            engine = JinaEmbeddingEngine()
+            if not engine.model:
+                engine.load_model("jinaai/jina-embeddings-v2-base-code")
+            embeddings: List[EmbeddingData] = []
+            for idx, text in enumerate(texts):
+                vec = engine.encode_text(text)
+                embeddings.append(
+                    EmbeddingData(
+                        id=f"doc_{idx}",
+                        text=text,
+                        embedding=vec,
+                        metadata={"type": "documentation"}
+                    )
+                )
+            return self.add_embeddings(embeddings)
+        except Exception as e:
+            logger.error(f"store_documentation_embeddings failed: {e}")
+            return False 

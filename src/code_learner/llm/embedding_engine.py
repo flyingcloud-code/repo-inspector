@@ -32,7 +32,9 @@ class JinaEmbeddingEngine(IEmbeddingEngine):
             cache_dir: 模型缓存目录
         """
         self.model: Optional[SentenceTransformer] = None
-        self.cache_dir = cache_dir or "~/.cache/torch/sentence_transformers/"
+        # 使用默认 HuggingFace 缓存路径，确保 '~' 被正确展开
+        _default_cache = Path.home() / ".cache" / "torch" / "sentence_transformers"
+        self.cache_dir = str(Path(cache_dir).expanduser()) if cache_dir else str(_default_cache)
         self.model_name: Optional[str] = None
         
     def load_model(self, model_name: str) -> bool:
@@ -211,4 +213,8 @@ class JinaEmbeddingEngine(IEmbeddingEngine):
             "embedding_dimension": len(test_embedding),
             "cache_dir": self.cache_dir,
             "device": str(self.model.device) if hasattr(self.model, 'device') else "cpu"
-        } 
+        }
+
+    def get_cache_path(self) -> str:
+        """获取模型缓存路径"""
+        return self.cache_dir 

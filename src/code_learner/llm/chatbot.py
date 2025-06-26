@@ -37,6 +37,7 @@ class OpenRouterChatBot(IChatBot):
         self.max_tokens: int = 8192
         self.temperature: float = 1.0
         self.top_p: float = 0.95
+        self.last_response_time: float = 0.0
         
         # 请求配置
         self.timeout = 30
@@ -299,6 +300,7 @@ class OpenRouterChatBot(IChatBot):
                 else:
                     raise APIConnectionError(f"Network error: {str(e)}")
         
+        # 如果所有重试失败，则抛出异常
         raise APIConnectionError("API call failed after all retries")
     
     def _parse_response(self, response: Dict[str, Any], request_type: str) -> ChatResponse:
@@ -326,6 +328,18 @@ class OpenRouterChatBot(IChatBot):
             # 提取使用统计
             usage = response.get("usage", {})
             
+            # 解析响应内容
+            try:
+                if not content:
+                    logger.warning("API响应中缺少内容")
+                    raise ModelError("API响应为空或格式不正确")
+            except (IndexError, KeyError) as e:
+                logger.error(f"解析API响应失败: {e}")
+                raise ModelError(f"解析API响应失败: {e}")
+            
+            # 记录响应时间
+            self.last_response_time = response.get("response_ms", 0) / 1000.0  # 转换为秒
+            
             # 创建ChatResponse对象
             chat_response = ChatResponse(
                 content=content,
@@ -349,14 +363,13 @@ class OpenRouterChatBot(IChatBot):
         """获取模型信息
         
         Returns:
-            Dict: 模型配置信息
+            Dict: 模型信息
         """
         return {
             "model_name": self.model_name,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "top_p": self.top_p,
-            "base_url": self.base_url,
-            "timeout": self.timeout,
-            "max_retries": self.max_retries
+            "api_base_url": self.base_url,
+            "last_response_time_ms": self.last_response_time * 1000
         } 

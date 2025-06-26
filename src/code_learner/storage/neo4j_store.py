@@ -10,14 +10,20 @@ Neo4j图数据库存储实现
 """
 
 import logging
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from neo4j import GraphDatabase, Driver, Session
-from neo4j.exceptions import ServiceUnavailable, AuthError, Neo4jError
+from neo4j.exceptions import ServiceUnavailable, AuthError, Neo4jError, ConfigurationError, TransientError
+from pathlib import Path
+import os
+import time
+from datetime import datetime
+from dotenv import load_dotenv
 
 from ..core.interfaces import IGraphStore
-from ..core.data_models import ParsedCode
+from ..core.data_models import ParsedCode, Function, FileInfo, FunctionCall, FolderStructure, FileDependency, ModuleDependency
 from ..core.exceptions import StorageError
 from ..config.config_manager import ConfigManager
+from ..utils.logger import get_logger
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +37,9 @@ class Neo4jGraphStore(IGraphStore):
     def __init__(self):
         """初始化Neo4j图存储"""
         self.driver: Optional[Driver] = None
+        self.uri = None
+        self.user = None
+        self.connected = False
         
         # 根据配置设置日志级别
         try:
@@ -58,13 +67,16 @@ class Neo4jGraphStore(IGraphStore):
         if self.verbose:
             logger.debug("🔧 Verbose logging enabled for detailed operation tracking")
 
-    def connect(self, uri: str, user: str, password: str) -> bool:
+        # 加载环境变量
+        load_dotenv()
+
+    def connect(self, uri: str = None, user: str = None, password: str = None) -> bool:
         """连接到Neo4j数据库
         
         Args:
-            uri: Neo4j数据库URI (如 bolt://localhost:7687)
-            user: 用户名
-            password: 密码
+            uri: 数据库URI，如果为None则从环境变量获取
+            user: 用户名，如果为None则从环境变量获取
+            password: 密码，如果为None则从环境变量获取
             
         Returns:
             bool: 连接是否成功
@@ -76,7 +88,16 @@ class Neo4jGraphStore(IGraphStore):
         logger.debug(f"Connection config: max_pool_size=50, timeout=60s")
         
         try:
-            # 创建驱动连接
+            # 如果参数为None，尝试从环境变量获取
+            uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
+            user = user or os.getenv("NEO4J_USER", "neo4j")
+            password = password or os.getenv("NEO4J_PASSWORD")
+            
+            if not password:
+                logger.error("未提供Neo4j密码，请设置NEO4J_PASSWORD环境变量")
+                return False
+            
+            # 使用上下文管理器确保资源正确释放
             self.driver = GraphDatabase.driver(
                 uri, 
                 auth=(user, password),
@@ -85,31 +106,33 @@ class Neo4jGraphStore(IGraphStore):
                 connection_acquisition_timeout=60.0
             )
             
-            logger.debug("Driver created, verifying connectivity...")
-            
-            # 验证连接
+            # 立即验证连接
             self.driver.verify_connectivity()
+            
+            self.uri = uri
+            self.user = user
+            self.connected = True
             
             logger.info("✅ Successfully connected to Neo4j database")
             logger.debug(f"Driver info: {self.driver}")
+            
+            # 初始化数据库约束
+            self._initialize_constraints()
+            
             return True
             
-        except ServiceUnavailable as e:
-            error_msg = f"Neo4j service unavailable at {uri}: {e}"
+        except (ServiceUnavailable, AuthError, ConfigurationError) as e:
+            error_msg = f"Neo4j connection failed: {e}"
             logger.error(f"❌ {error_msg}")
             self.driver = None
-            raise StorageError("connection_unavailable", error_msg)
-            
-        except AuthError as e:
-            error_msg = f"Authentication failed for user '{user}': {e}"
-            logger.error(f"❌ {error_msg}")
-            self.driver = None
-            raise StorageError("authentication_failed", error_msg)
+            self.connected = False
+            raise StorageError("connection_failed", error_msg)
             
         except Exception as e:
             error_msg = f"Unexpected connection error: {e}"
             logger.error(f"❌ {error_msg}")
             self.driver = None
+            self.connected = False
             raise StorageError("connection_error", error_msg)
 
     def store_parsed_code(self, parsed_code: ParsedCode) -> bool:
@@ -383,6 +406,7 @@ class Neo4jGraphStore(IGraphStore):
             logger.debug("Closing driver and cleaning up resources")
             self.driver.close()
             self.driver = None
+            self.connected = False
             logger.info("✅ Neo4j connection closed successfully")
         else:
             logger.debug("No active connection to close")
@@ -604,4 +628,390 @@ class Neo4jGraphStore(IGraphStore):
         Raises:
             NotImplementedError: 功能将在Story 2.1.5中实现
         """
-        raise NotImplementedError("store_folder_structure will be implemented in Story 2.1.5") 
+        raise NotImplementedError("store_folder_structure will be implemented in Story 2.1.5")
+
+    def store_file_dependencies(self, dependencies: List[FileDependency]) -> bool:
+        """存储文件依赖关系
+        
+        Args:
+            dependencies: 文件依赖关系列表
+            
+        Returns:
+            bool: 是否成功
+        """
+        logger.info(f"存储文件依赖关系: {len(dependencies)}个")
+        
+        if not self.driver:
+            logger.error("数据库连接未初始化")
+            return False
+        
+        try:
+            with self.driver.session() as session:
+                return session.execute_write(self._store_file_dependencies_tx, dependencies)
+                
+        except Exception as e:
+            logger.error(f"存储文件依赖关系失败: {e}")
+            return False
+    
+    def _store_file_dependencies_tx(self, tx, dependencies: List[FileDependency]) -> bool:
+        """存储文件依赖关系的事务函数
+        
+        Args:
+            tx: 事务对象
+            dependencies: 文件依赖关系列表
+            
+        Returns:
+            bool: 是否存储成功
+        """
+        try:
+            # 批量创建文件依赖关系
+            query = """
+            UNWIND $dependencies AS dep
+            MERGE (source:File {path: dep.source_file})
+            MERGE (target:File {path: dep.target_file})
+            MERGE (source)-[r:DEPENDS_ON {
+                type: dep.dependency_type,
+                is_system: dep.is_system
+            }]->(target)
+            SET r.line_number = dep.line_number,
+                r.updated_at = datetime()
+            """
+            
+            dependencies_data = [
+                {
+                    "source_file": dep.source_file,
+                    "target_file": dep.target_file,
+                    "dependency_type": dep.dependency_type,
+                    "is_system": dep.is_system,
+                    "line_number": dep.line_number
+                }
+                for dep in dependencies
+            ]
+            
+            tx.run(query, dependencies=dependencies_data)
+            return True
+            
+        except Exception as e:
+            logger.error(f"存储文件依赖关系事务失败: {e}")
+            raise
+    
+    def store_module_dependencies(self, dependencies: List[ModuleDependency]) -> bool:
+        """存储模块依赖关系
+        
+        Args:
+            dependencies: 模块依赖关系列表
+            
+        Returns:
+            bool: 是否成功
+        """
+        logger.info(f"存储模块依赖关系: {len(dependencies)}个")
+        
+        if not self.driver:
+            logger.error("数据库连接未初始化")
+            return False
+        
+        try:
+            with self.driver.session() as session:
+                return session.execute_write(self._store_module_dependencies_tx, dependencies)
+                
+        except Exception as e:
+            logger.error(f"存储模块依赖关系失败: {e}")
+            return False
+    
+    def _store_module_dependencies_tx(self, tx, dependencies: List[ModuleDependency]) -> bool:
+        """存储模块依赖关系的事务函数
+        
+        Args:
+            tx: 事务对象
+            dependencies: 模块依赖关系列表
+            
+        Returns:
+            bool: 是否存储成功
+        """
+        try:
+            # 批量创建模块依赖关系
+            query = """
+            UNWIND $dependencies AS dep
+            MERGE (source:Module {name: dep.source_module})
+            MERGE (target:Module {name: dep.target_module})
+            MERGE (source)-[r:DEPENDS_ON]->(target)
+            SET r.file_count = dep.file_count,
+                r.strength = dep.strength,
+                r.is_circular = dep.is_circular,
+                r.updated_at = datetime()
+            """
+            
+            dependencies_data = [
+                {
+                    "source_module": dep.source_module,
+                    "target_module": dep.target_module,
+                    "file_count": dep.file_count,
+                    "strength": dep.strength,
+                    "is_circular": dep.is_circular
+                }
+                for dep in dependencies
+            ]
+            
+            tx.run(query, dependencies=dependencies_data)
+            return True
+            
+        except Exception as e:
+            logger.error(f"存储模块依赖关系事务失败: {e}")
+            raise
+    
+    def query_file_dependencies(self, file_path: str = None) -> List[Dict[str, Any]]:
+        """查询文件依赖关系
+        
+        Args:
+            file_path: 文件路径，如果为None则查询所有文件依赖
+            
+        Returns:
+            List[Dict[str, Any]]: 文件依赖关系列表
+        """
+        logger.info(f"查询文件依赖关系: {file_path if file_path else '所有'}")
+        
+        if not self.driver:
+            logger.error("数据库连接未初始化")
+            return []
+        
+        try:
+            with self.driver.session() as session:
+                if file_path:
+                    # 查询特定文件的依赖
+                    result = session.run(
+                        """
+                        MATCH (source:File {path: $file_path})-[r:DEPENDS_ON]->(target:File)
+                        RETURN source.path AS source_file, target.path AS target_file,
+                               r.type AS dependency_type, r.is_system AS is_system,
+                               r.line_number AS line_number, r.context AS context
+                        """,
+                        file_path=file_path
+                    )
+                else:
+                    # 查询所有文件依赖
+                    result = session.run(
+                        """
+                        MATCH (source:File)-[r:DEPENDS_ON]->(target:File)
+                        RETURN source.path AS source_file, target.path AS target_file,
+                               r.type AS dependency_type, r.is_system AS is_system,
+                               r.line_number AS line_number, r.context AS context
+                        """
+                    )
+                
+                dependencies = []
+                for record in result:
+                    dependency = {
+                        "source_file": record["source_file"],
+                        "target_file": record["target_file"],
+                        "dependency_type": record["dependency_type"],
+                        "is_system": record["is_system"],
+                        "line_number": record["line_number"],
+                        "context": record["context"]
+                    }
+                    dependencies.append(dependency)
+                
+                logger.debug(f"查询到 {len(dependencies)} 个文件依赖关系")
+                return dependencies
+        
+        except Exception as e:
+            logger.error(f"查询文件依赖关系失败: {e}")
+            return []
+    
+    def query_module_dependencies(self, module_name: str = None) -> List[Dict[str, Any]]:
+        """查询模块依赖关系
+        
+        Args:
+            module_name: 模块名称，如果为None则查询所有模块依赖
+            
+        Returns:
+            List[Dict[str, Any]]: 模块依赖关系列表
+        """
+        logger.info(f"查询模块依赖关系: {module_name if module_name else '所有'}")
+        
+        if not self.driver:
+            logger.error("数据库连接未初始化")
+            return []
+        
+        try:
+            with self.driver.session() as session:
+                if module_name:
+                    # 查询特定模块的依赖
+                    result = session.run(
+                        """
+                        MATCH (source:Module {name: $module_name})-[r:DEPENDS_ON]->(target:Module)
+                        RETURN source.name AS source_module, target.name AS target_module,
+                               r.file_count AS file_count, r.strength AS strength,
+                               r.is_circular AS is_circular
+                        """,
+                        module_name=module_name
+                    )
+                else:
+                    # 查询所有模块依赖
+                    result = session.run(
+                        """
+                        MATCH (source:Module)-[r:DEPENDS_ON]->(target:Module)
+                        RETURN source.name AS source_module, target.name AS target_module,
+                               r.file_count AS file_count, r.strength AS strength,
+                               r.is_circular AS is_circular
+                        """
+                    )
+                
+                dependencies = []
+                for record in result:
+                    # 查询该模块依赖涉及的文件
+                    files_result = session.run(
+                        """
+                        MATCH (sf:File)-[:BELONGS_TO]->(source:Module {name: $source_module})
+                        MATCH (tf:File)-[:BELONGS_TO]->(target:Module {name: $target_module})
+                        MATCH (sf)-[:DEPENDS_ON]->(tf)
+                        RETURN sf.path AS source_file, tf.path AS target_file
+                        LIMIT 100
+                        """,
+                        source_module=record["source_module"],
+                        target_module=record["target_module"]
+                    )
+                    
+                    files = [(file["source_file"], file["target_file"]) for file in files_result]
+                    
+                    dependency = {
+                        "source_module": record["source_module"],
+                        "target_module": record["target_module"],
+                        "file_count": record["file_count"],
+                        "strength": record["strength"],
+                        "is_circular": record["is_circular"],
+                        "files": files
+                    }
+                    dependencies.append(dependency)
+                
+                logger.debug(f"查询到 {len(dependencies)} 个模块依赖关系")
+                return dependencies
+        
+        except Exception as e:
+            logger.error(f"查询模块依赖关系失败: {e}")
+            return []
+    
+    def detect_circular_dependencies(self) -> List[List[str]]:
+        """检测循环依赖
+        
+        Returns:
+            List[List[str]]: 循环依赖链列表
+        """
+        logger.info("检测循环依赖")
+        
+        if not self.driver:
+            logger.error("数据库连接未初始化")
+            return []
+        
+        try:
+            with self.driver.session() as session:
+                # 使用Neo4j的路径查找功能检测环
+                result = session.run(
+                    """
+                    MATCH path = (m:Module)-[:DEPENDS_ON*2..10]->(m)
+                    WITH nodes(path) AS modules
+                    RETURN [module IN modules | module.name] AS cycle
+                    LIMIT 100
+                    """
+                )
+                
+                circular_dependencies = []
+                for record in result:
+                    cycle = record["cycle"]
+                    # 确保环的起点和终点相同
+                    if cycle[0] == cycle[-1]:
+                        # 去除重复的环
+                        normalized_cycle = cycle[:-1]  # 移除最后一个重复元素
+                        if normalized_cycle not in circular_dependencies:
+                            circular_dependencies.append(normalized_cycle)
+                
+                logger.debug(f"检测到 {len(circular_dependencies)} 个循环依赖")
+                return circular_dependencies
+        
+        except Exception as e:
+            logger.error(f"检测循环依赖失败: {e}")
+            return []
+
+    def health_check(self) -> Dict[str, Any]:
+        """健康检查
+        
+        Returns:
+            Dict[str, Any]: 健康状态
+        """
+        try:
+            if not self.driver:
+                return {"status": "unhealthy", "error": "数据库连接未初始化"}
+            
+            with self.driver.session() as session:
+                result = session.run("RETURN 1 as test")
+                record = result.single()
+                
+                if record and record["test"] == 1:
+                    # 获取节点和关系统计
+                    stats_result = session.run("""
+                        MATCH (n) 
+                        OPTIONAL MATCH ()-[r]->() 
+                        RETURN count(DISTINCT n) as nodes, count(r) as relationships
+                    """)
+                    stats = stats_result.single()
+                    
+                    return {
+                        "status": "healthy", 
+                        "uri": self.uri,
+                        "user": self.user,
+                        "nodes": stats["nodes"],
+                        "relationships": stats["relationships"],
+                        "timestamp": datetime.now().isoformat()
+                    }
+                else:
+                    return {"status": "unhealthy", "error": "查询结果异常"}
+                    
+        except Exception as e:
+            return {"status": "unhealthy", "error": str(e)}
+
+    def _initialize_constraints(self):
+        """初始化数据库约束和索引"""
+        if not self.connected or not self.driver:
+            logger.warning("数据库连接未初始化，无法创建约束")
+            return
+        
+        try:
+            with self.driver.session() as session:
+                # 创建函数节点的唯一约束
+                session.run("""
+                    CREATE CONSTRAINT function_name_file_unique IF NOT EXISTS
+                    FOR (f:Function)
+                    REQUIRE (f.name, f.file_path) IS UNIQUE
+                """)
+                
+                # 创建文件节点的唯一约束
+                session.run("""
+                    CREATE CONSTRAINT file_path_unique IF NOT EXISTS
+                    FOR (f:File)
+                    REQUIRE f.path IS UNIQUE
+                """)
+                
+                # 创建模块节点的唯一约束
+                session.run("""
+                    CREATE CONSTRAINT module_name_unique IF NOT EXISTS
+                    FOR (m:Module)
+                    REQUIRE m.name IS UNIQUE
+                """)
+                
+                # 创建索引以提高查询性能
+                session.run("""
+                    CREATE INDEX function_name_index IF NOT EXISTS
+                    FOR (f:Function)
+                    ON (f.name)
+                """)
+                
+                session.run("""
+                    CREATE INDEX file_name_index IF NOT EXISTS
+                    FOR (f:File)
+                    ON (f.name)
+                """)
+                
+                logger.info("Neo4j数据库约束和索引已初始化")
+                
+        except Exception as e:
+            logger.error(f"创建数据库约束失败: {e}")
+            # 约束创建失败不应该影响整体功能 

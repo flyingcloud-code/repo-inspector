@@ -27,18 +27,32 @@ class DatabaseConnectionError(CodeLearnerError):
 
 class StorageError(CodeLearnerError):
     """存储操作异常"""
-    def __init__(self, operation: str, message: str):
-        self.operation = operation
-        self.message = message
-        super().__init__(f"Storage error during '{operation}': {message}")
+    def __init__(self, operation_or_message: str, message: str = None):
+        if message is None:
+            # 只提供了一个参数，作为message使用
+            self.operation = "general"
+            self.message = operation_or_message
+            super().__init__(f"Storage error: {self.message}")
+        else:
+            # 提供了两个参数
+            self.operation = operation_or_message
+            self.message = message
+            super().__init__(f"Storage error during '{self.operation}': {self.message}")
 
 
 class ConfigurationError(CodeLearnerError):
     """配置异常"""
-    def __init__(self, config_key: str, message: str):
-        self.config_key = config_key
-        self.message = message
-        super().__init__(f"Configuration error for '{config_key}': {message}")
+    def __init__(self, config_key_or_message: str, message: str = None):
+        if message is None:
+            # 只提供了一个参数，作为message使用
+            self.config_key = "general"
+            self.message = config_key_or_message
+            super().__init__(f"Configuration error: {self.message}")
+        else:
+            # 提供了两个参数
+            self.config_key = config_key_or_message
+            self.message = message
+            super().__init__(f"Configuration error for '{self.config_key}': {self.message}")
 
 
 class ModelLoadError(CodeLearnerError):

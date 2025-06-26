@@ -1,102 +1,73 @@
-# C语言智能代码分析调试工具配置文件
-# 版本: v1.0
+# 应用配置
+app:
+  name: "Code Repo Learner"
+  version: "0.1.0"
+  debug: true
+  verbose: false
+  data_dir: "./data"
+  logs_dir: "./logs"
+  cache_dir: "./cache"
 
 # 数据库配置
 database:
-  # Neo4j图数据库配置 (Docker容器)
-  # 注意: 密码通过环境变量 NEO4J_PASSWORD 提供，不在配置文件中存储
   neo4j:
     uri: "bolt://localhost:7687"
     user: "neo4j"
     database: "neo4j"
-    
-  # SQLite配置 (元数据存储)
   sqlite:
     path: "./data/metadata.db"
-    
+
 # 向量数据库配置
 vector_store:
-  # Chroma配置
   chroma:
     persist_directory: "./data/chroma"
     collection_name: "code_embeddings"
-    
+
 # LLM配置
 llm:
-  # 嵌入模型配置 (本地)
   embedding:
     model_name: "jinaai/jina-embeddings-v2-base-code"
     cache_dir: "~/.cache/torch/sentence_transformers/"
     batch_size: 32
-    
-  # 对话模型配置 (OpenRouter)
   chat:
-    api_key: ""  # 通过环境变量 OPENROUTER_API_KEY 设置
+    api_key: "test_key"
     base_url: "https://openrouter.ai/api/v1/chat/completions"
     model: "google/gemini-2.0-flash-001"
     max_tokens: 8192
     temperature: 1.0
     top_p: 0.95
-    
+
 # 解析器配置
 parser:
-  # Tree-sitter配置
   tree_sitter:
     language: "c"
-    
-  # 文件过滤配置
   file_patterns:
     include: ["*.c", "*.h"]
     exclude: ["*test*", "*example*", "*.bak"]
-    
-  # 解析选项
   options:
-    max_file_size: 10485760  # 10MB
+    max_file_size: 10485760
     encoding: "utf-8"
-    
+
 # 日志配置
 logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  
-  # 文件日志
   file:
     enabled: true
     path: "./logs/code_learner.log"
     max_size: "10MB"
     backup_count: 5
-    
-  # 控制台日志
   console:
     enabled: true
     level: "INFO"
-    
+
 # 性能配置
 performance:
-  # 并行处理
   max_workers: 4
-  
-  # 缓存配置
   cache:
     enabled: true
-    ttl: 3600  # 1小时
+    ttl: 3600
     max_size: 1000
-    
-  # 批处理配置
   batch:
     embedding_batch_size: 32
     parsing_batch_size: 10
-    
-# 应用配置
-app:
-  name: "C语言智能代码分析调试工具"
-  version: "0.1.0"
-  
-  # 数据目录
-  data_dir: "./data"
-  logs_dir: "./logs"
-  cache_dir: "./cache"
-  
-  # 调试选项
-  debug: false
-  verbose: false 

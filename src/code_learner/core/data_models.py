@@ -4,9 +4,201 @@
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 from pathlib import Path
 from datetime import datetime
+
+# 配置相关数据模型
+@dataclass
+class DatabaseConfig:
+    """数据库配置"""
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = ""  # 必须通过环境变量 NEO4J_PASSWORD 提供
+    neo4j_database: str = "neo4j"
+    sqlite_path: str = "./data/metadata.db"
+
+
+@dataclass
+class VectorStoreConfig:
+    """向量存储配置"""
+    chroma_persist_directory: str = "./data/chroma"
+    chroma_collection_name: str = "code_embeddings"
+
+
+@dataclass
+class LLMConfig:
+    """LLM配置"""
+    embedding_model_name: str = "jinaai/jina-embeddings-v2-base-code"
+    embedding_cache_dir: str = "~/.cache/torch/sentence_transformers/"
+    embedding_batch_size: int = 32
+
+    chat_api_key: str = ""
+    chat_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
+    chat_model: str = "google/gemini-2.0-flash-001"
+    chat_max_tokens: int = 8192
+    chat_temperature: float = 1.0
+    chat_top_p: float = 0.95
+
+
+@dataclass
+class ParserConfig:
+    """解析器配置"""
+    tree_sitter_language: str = "c"
+    include_patterns: list = None
+    exclude_patterns: list = None
+    max_file_size: int = 10485760  # 10MB
+    encoding: str = "utf-8"
+
+    def __post_init__(self):
+        if self.include_patterns is None:
+            self.include_patterns = ["*.c", "*.h"]
+        if self.exclude_patterns is None:
+            self.exclude_patterns = ["*test*", "*example*", "*.bak"]
+
+
+@dataclass
+class LoggingConfig:
+    """日志配置"""
+    level: str = "INFO"
+    format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    file_enabled: bool = True
+    file_path: str = "./logs/code_learner.log"
+    file_max_size: str = "10MB"
+    file_backup_count: int = 5
+    console_enabled: bool = True
+    console_level: str = "INFO"
+
+
+@dataclass
+class PerformanceConfig:
+    """性能配置"""
+    max_workers: int = 4
+    cache_enabled: bool = True
+    cache_ttl: int = 3600
+    cache_max_size: int = 1000
+    embedding_batch_size: int = 32
+    parsing_batch_size: int = 10
+
+
+@dataclass
+class AppConfig:
+    """应用配置"""
+    name: str = "C语言智能代码分析调试工具"
+    version: str = "0.1.0"
+    data_dir: str = "./data"
+    logs_dir: str = "./logs"
+    cache_dir: str = "./cache"
+    debug: bool = False
+    verbose: bool = False
+
+
+@dataclass
+class Config:
+    """完整配置"""
+    database: DatabaseConfig
+    vector_store: VectorStoreConfig
+    llm: LLMConfig
+    parser: ParserConfig
+    logging: LoggingConfig
+    performance: PerformanceConfig
+    app: AppConfig
+    
+    @classmethod
+    def from_dict(cls, config_data: Dict[str, Any]) -> 'Config':
+        """从字典创建配置对象
+        
+        Args:
+            config_data: 配置数据字典
+            
+        Returns:
+            Config: 配置对象
+        """
+        # 创建各个配置部分
+        db_data = config_data.get('database', {})
+        neo4j_data = db_data.get('neo4j', {})
+        sqlite_data = db_data.get('sqlite', {})
+        
+        db_args = {}
+        if 'uri' in neo4j_data: db_args['neo4j_uri'] = neo4j_data['uri']
+        if 'user' in neo4j_data: db_args['neo4j_user'] = neo4j_data['user']
+        if 'password' in neo4j_data: db_args['neo4j_password'] = neo4j_data['password']
+        if 'database' in neo4j_data: db_args['neo4j_database'] = neo4j_data['database']
+        if 'path' in sqlite_data: db_args['sqlite_path'] = sqlite_data['path']
+        database_config = DatabaseConfig(**db_args)
+
+        vector_store_data = config_data.get('vector_store', {})
+        chroma_data = vector_store_data.get('chroma', {})
+        vector_store_config = VectorStoreConfig(
+            chroma_persist_directory=chroma_data.get('persist_directory'),
+            chroma_collection_name=chroma_data.get('collection_name')
+        )
+        
+        llm_data = config_data.get('llm', {})
+        embedding_data = llm_data.get('embedding', {})
+        chat_data = llm_data.get('chat', {})
+        llm_config = LLMConfig(
+            embedding_model_name=embedding_data.get('model_name'),
+            embedding_cache_dir=embedding_data.get('cache_dir'),
+            embedding_batch_size=embedding_data.get('batch_size'),
+            chat_api_key=chat_data.get('api_key'),
+            chat_base_url=chat_data.get('base_url'),
+            chat_model=chat_data.get('model'),
+            chat_max_tokens=chat_data.get('max_tokens'),
+            chat_temperature=chat_data.get('temperature'),
+            chat_top_p=chat_data.get('top_p')
+        )
+
+        parser_data = config_data.get('parser', {})
+        tree_sitter_data = parser_data.get('tree_sitter', {})
+        file_patterns_data = parser_data.get('file_patterns', {})
+        options_data = parser_data.get('options', {})
+        parser_config = ParserConfig(
+            tree_sitter_language=tree_sitter_data.get('language'),
+            include_patterns=file_patterns_data.get('include'),
+            exclude_patterns=file_patterns_data.get('exclude'),
+            max_file_size=options_data.get('max_file_size'),
+            encoding=options_data.get('encoding')
+        )
+
+        logging_data = config_data.get('logging', {})
+        file_log_data = logging_data.get('file', {})
+        console_log_data = logging_data.get('console', {})
+        logging_config = LoggingConfig(
+            level=logging_data.get('level'),
+            format=logging_data.get('format'),
+            file_enabled=file_log_data.get('enabled'),
+            file_path=file_log_data.get('path'),
+            file_max_size=file_log_data.get('max_size'),
+            file_backup_count=file_log_data.get('backup_count'),
+            console_enabled=console_log_data.get('enabled'),
+            console_level=console_log_data.get('level')
+        )
+        
+        performance_data = config_data.get('performance', {})
+        cache_data = performance_data.get('cache', {})
+        batch_data = performance_data.get('batch', {})
+        performance_config = PerformanceConfig(
+            max_workers=performance_data.get('max_workers'),
+            cache_enabled=cache_data.get('enabled'),
+            cache_ttl=cache_data.get('ttl'),
+            cache_max_size=cache_data.get('max_size'),
+            embedding_batch_size=batch_data.get('embedding_batch_size'),
+            parsing_batch_size=batch_data.get('parsing_batch_size')
+        )
+        
+        app_config = AppConfig(**config_data.get('app', {}))
+
+        # 创建完整配置对象
+        return cls(
+            database=database_config,
+            vector_store=vector_store_config,
+            llm=llm_config,
+            parser=parser_config,
+            logging=logging_config,
+            performance=performance_config,
+            app=app_config
+        )
 
 
 @dataclass
@@ -562,4 +754,114 @@ class AnalysisResult:
     
     def get_function_calls_by_callee(self, callee_name: str) -> List[FunctionCall]:
         """获取调用指定函数的所有调用关系"""
-        return [call for call in self.call_relationships if call.callee_name == callee_name] 
+        return [call for call in self.call_relationships if call.callee_name == callee_name]
+
+
+@dataclass
+class FileDependency:
+    """文件依赖关系
+
+    表示一个文件对另一个文件的依赖关系，主要是通过#include语句建立的依赖
+    """
+    source_file: str  # 源文件路径
+    target_file: str  # 目标文件路径
+    dependency_type: str = "include"  # 'include', 'import', 'use'
+    is_system: bool = False  # 是否系统头文件
+    line_number: int = 0  # 引用行号
+    context: str = ""  # 上下文代码片段
+
+    def __str__(self) -> str:
+        """返回可读的依赖描述"""
+        dep_type = "系统" if self.is_system else "项目"
+        return f"{self.source_file} -> {self.target_file} ({dep_type}{self.dependency_type}，行 {self.line_number})"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典表示"""
+        return {
+            "source_file": self.source_file,
+            "target_file": self.target_file,
+            "dependency_type": self.dependency_type,
+            "is_system": self.is_system,
+            "line_number": self.line_number,
+            "context": self.context
+        }
+
+
+@dataclass
+class ModuleDependency:
+    """模块依赖关系
+
+    表示一个模块对另一个模块的依赖关系，通过文件依赖聚合计算得到
+    """
+    source_module: str  # 源模块名称
+    target_module: str  # 目标模块名称
+    file_count: int = 0  # 依赖文件数量
+    strength: float = 0.0  # 依赖强度(0-1)
+    is_circular: bool = False  # 是否循环依赖
+    files: List[Tuple[str, str]] = field(default_factory=list)  # 依赖的文件对列表 [(源文件, 目标文件), ...]
+
+    def __str__(self) -> str:
+        """返回可读的依赖描述"""
+        circular = "循环依赖" if self.is_circular else ""
+        return f"{self.source_module} -> {self.target_module} ({self.file_count}文件, 强度{self.strength:.2f}) {circular}"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典表示"""
+        return {
+            "source_module": self.source_module,
+            "target_module": self.target_module,
+            "file_count": self.file_count,
+            "strength": self.strength,
+            "is_circular": self.is_circular,
+            "files": self.files
+        }
+    
+    def add_file_dependency(self, source_file: str, target_file: str) -> None:
+        """添加文件依赖关系"""
+        self.files.append((source_file, target_file))
+        self.file_count = len(self.files)
+
+
+@dataclass
+class ProjectDependencies:
+    """项目依赖关系
+
+    包含项目中所有文件和模块的依赖关系
+    """
+    file_dependencies: List[FileDependency] = field(default_factory=list)
+    module_dependencies: List[ModuleDependency] = field(default_factory=list)
+    circular_dependencies: List[List[str]] = field(default_factory=list)
+    modularity_score: float = 0.0  # 模块化评分(0-1)
+    
+    def add_file_dependency(self, dependency: FileDependency) -> None:
+        """添加文件依赖关系"""
+        self.file_dependencies.append(dependency)
+    
+    def add_module_dependency(self, dependency: ModuleDependency) -> None:
+        """添加模块依赖关系"""
+        self.module_dependencies.append(dependency)
+    
+    def add_circular_dependency(self, dependency_chain: List[str]) -> None:
+        """添加循环依赖链"""
+        self.circular_dependencies.append(dependency_chain)
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """获取依赖统计信息"""
+        return {
+            "file_dependencies_count": len(self.file_dependencies),
+            "module_dependencies_count": len(self.module_dependencies),
+            "circular_dependencies_count": len(self.circular_dependencies),
+            "system_headers_count": sum(1 for d in self.file_dependencies if d.is_system),
+            "project_headers_count": sum(1 for d in self.file_dependencies if not d.is_system),
+            "modularity_score": self.modularity_score
+        }
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典表示"""
+        return {
+            "file_dependencies": [d.to_dict() for d in self.file_dependencies],
+            "module_dependencies": [d.to_dict() for d in self.module_dependencies],
+            "circular_dependencies": self.circular_dependencies,
+            "modularity_score": self.modularity_score,
+            "stats": self.get_stats()
+        } 

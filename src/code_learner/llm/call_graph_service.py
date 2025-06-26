@@ -393,4 +393,32 @@ class CallGraphService:
         # 确保以字母开头
         if sanitized and not sanitized[0].isalpha():
             sanitized = 'fn_' + sanitized
-        return sanitized or 'unknown_node' 
+        return sanitized or 'unknown_node'
+    
+    def find_entry_functions(self) -> List[str]:
+        """查找入口函数(简化实现)"""
+        try:
+            # 查询所有没有被调用的函数作为入口
+            functions = self.graph_store.find_functions_without_incoming_calls()
+            return [f["name"] if isinstance(f, dict) else f for f in functions]
+        except Exception:
+            # 无法查询时返回空列表
+            return []
+    
+    # ------------------------------------------------------------------
+    # Export helpers
+    # ------------------------------------------------------------------
+    def export_call_graph(self, root_function: str, output_path: Path, format_type: str = "mermaid", depth: int = 3) -> bool:
+        """从根函数生成调用图并保存到文件
+
+        Args:
+            root_function: 根函数名称
+            output_path: 输出文件路径
+            format_type: 图形格式 (mermaid / json)
+            depth: 调用深度
+
+        Returns:
+            bool: 是否导出成功
+        """
+        graph_data = self.build_graph(root_function, depth)
+        return self.export_to_file(graph_data, output_path, format_type) 

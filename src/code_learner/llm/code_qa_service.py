@@ -8,7 +8,7 @@
 import logging
 from typing import List, Dict, Any, Optional
 
-from .service_factory import LLMServiceFactory
+from .service_factory import ServiceFactory
 from .embedding_engine import JinaEmbeddingEngine
 from .vector_store import ChromaVectorStore
 from .chatbot import OpenRouterChatBot
@@ -26,9 +26,9 @@ class CodeQAService:
     支持repo级别的智能代码理解和交互
     """
     
-    def __init__(self, service_factory: Optional[LLMServiceFactory] = None):
+    def __init__(self, service_factory: Optional[ServiceFactory] = None):
         """初始化代码问答服务"""
-        self.service_factory = service_factory or LLMServiceFactory()
+        self.service_factory = service_factory or ServiceFactory()
         
         # 延迟初始化服务
         self._embedding_engine: Optional[JinaEmbeddingEngine] = None
@@ -39,7 +39,7 @@ class CodeQAService:
     def embedding_engine(self) -> JinaEmbeddingEngine:
         """获取嵌入引擎（延迟加载）"""
         if self._embedding_engine is None:
-            self._embedding_engine = self.service_factory.create_embedding_engine()
+            self._embedding_engine = self.service_factory.get_embedding_engine()
         return self._embedding_engine
     
     @property
@@ -53,7 +53,7 @@ class CodeQAService:
     def chatbot(self) -> OpenRouterChatBot:
         """获取聊天机器人（延迟加载）"""
         if self._chatbot is None:
-            self._chatbot = self.service_factory.create_chatbot()
+            self._chatbot = self.service_factory.get_chatbot()
         return self._chatbot
     
     def ask_code_question(self, question: str) -> str:
@@ -64,6 +64,10 @@ class CodeQAService:
         except Exception as e:
             logger.error(f"代码问题回答失败: {e}")
             raise ServiceError(f"Failed to answer question: {str(e)}")
+    
+    # 兼容外部调用名称
+    def ask_question(self, question: str, context: Optional[dict] = None) -> str:  # noqa
+        return self.ask_code_question(question)
     
     def generate_code_summary(self, code_content: str, file_path: Optional[str] = None) -> str:
         """生成代码摘要 - 用户明确要求的功能"""

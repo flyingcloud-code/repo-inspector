@@ -8,6 +8,52 @@
 
 ## 1. 架构概述
 
+### 1.0 系统工作流程
+
+本系统的核心工作流程分为项目创建、代码解析、向量嵌入和问答交互四个主要阶段：
+
+```mermaid
+flowchart TD
+    Start([开始]) --> CreateProject[创建项目]
+    CreateProject --> ParseCode[代码解析]
+    ParseCode --> EmbedCode[向量嵌入]
+    EmbedCode --> Ready[项目就绪]
+    Ready --> UserQuestion[用户提问]
+    UserQuestion --> IntentDetection[意图检测]
+    IntentDetection --> Retrieval[信息检索]
+    Retrieval --> EvaluateResults[评估结果]
+    EvaluateResults --> GenerateAnswer[生成回答]
+    GenerateAnswer --> UserQuestion
+    
+    subgraph "项目初始化阶段"
+        CreateProject
+        ParseCode
+        EmbedCode
+        Ready
+    end
+    
+    subgraph "问答交互阶段"
+        UserQuestion
+        IntentDetection
+        Retrieval
+        EvaluateResults
+        GenerateAnswer
+    end
+```
+
+**项目初始化阶段：**
+1. **创建项目**：用户提供C语言git repo地址，工具创建项目并初始化Neo4j、Chroma数据库和配置文件
+2. **代码解析**：解析repo获取函数、文件、调用关系等结构化信息，存储到Neo4j图数据库
+3. **向量嵌入**：对代码进行分块，生成向量嵌入，存储到Chroma向量数据库
+4. **项目就绪**：完成所有初始化工作，更新项目状态为"就绪"
+
+**问答交互阶段：**
+1. **用户提问**：用户针对代码库提出问题
+2. **意图检测**：LLM分析用户问题意图
+3. **信息检索**：从Neo4j和Chroma进行相似度检索(top-k)
+4. **评估结果**：LLM评估检索结果，确定最佳chunks
+5. **生成回答**：基于最终top-k chunks生成回答
+
 ### 1.1 POC架构原则
 本项目采用POC (Proof of Concept) 架构，专注于验证技术可行性：
 - **KISS原则:** 保持简单，避免过度设计
@@ -49,6 +95,46 @@
 
 ## 2. 系统架构设计
 
+### 2.0 系统架构图
+
+```mermaid
+flowchart TB
+    User([用户]) --> CLI[命令行界面]
+    CLI --> ProjectManager[项目管理器]
+    
+    ProjectManager --> Parser[代码解析器]
+    ProjectManager --> GraphStore[图数据库存储]
+    ProjectManager --> VectorStore[向量数据库存储]
+    
+    Parser --> TreeSitter[Tree-sitter解析引擎]
+    GraphStore --> Neo4j[(Neo4j图数据库)]
+    VectorStore --> EmbeddingEngine[嵌入引擎]
+    VectorStore --> Chroma[(Chroma向量数据库)]
+    
+    ProjectManager --> QAService[问答服务]
+    QAService --> EmbeddingEngine
+    QAService --> ChatBot[聊天机器人]
+    QAService --> GraphStore
+    QAService --> VectorStore
+    
+    EmbeddingEngine --> JinaEmbeddings[Jina嵌入模型]
+    ChatBot --> OpenRouter[OpenRouter API]
+    
+    ConfigManager[配置管理器] --> ProjectManager
+    ConfigManager --> Parser
+    ConfigManager --> GraphStore
+    ConfigManager --> VectorStore
+    ConfigManager --> QAService
+    
+    style ConfigManager fill:#f9f,stroke:#333,stroke-width:2
+    style ProjectManager fill:#bbf,stroke:#333,stroke-width:2
+    style QAService fill:#bbf,stroke:#333,stroke-width:2
+    style Neo4j fill:#bfb,stroke:#333,stroke-width:2
+    style Chroma fill:#bfb,stroke:#333,stroke-width:2
+    style JinaEmbeddings fill:#fbb,stroke:#333,stroke-width:2
+    style OpenRouter fill:#fbb,stroke:#333,stroke-width:2
+```
+
 ### 2.1 模块化单体架构
 
 ```
@@ -83,10 +169,134 @@ src/code_learner/
     └── helpers.py          # 通用工具
 ```
 
-### 2.2 核心接口设计 (SOLID原则)
+### 2.2 模块角色与职责
+
+| 模块名称 | 主要职责 | 关键组件 | 依赖关系 |
+|---------|---------|---------|---------|
+| **项目管理器** | 管理项目生命周期，协调各模块工作 | `ProjectManager` | 依赖解析器、存储和问答服务 |
+| **代码解析器** | 解析C代码，提取函数、调用关系等 | `CParser`, `TreeSitter` | 依赖Tree-sitter引擎 |
+| **图数据库存储** | 存储代码结构和关系信息 | `Neo4jGraphStore` | 依赖Neo4j数据库 |
+| **向量数据库存储** | 存储代码嵌入向量 | `ChromaVectorStore` | 依赖Chroma和嵌入引擎 |
+| **嵌入引擎** | 生成代码的向量表示 | `JinaEmbeddingEngine` | 依赖jina-embeddings模型 |
+| **问答服务** | 处理用户问题，生成回答 | `CodeQAService` | 依赖图存储、向量存储和聊天机器人 |
+| **聊天机器人** | 与LLM API交互 | `OpenRouterChatBot` | 依赖OpenRouter API |
+| **配置管理器** | 管理系统配置 | `ConfigManager` | 被所有模块依赖 |
+| **命令行界面** | 提供用户交互入口 | `CLI` | 依赖项目管理器 |
+
+### 2.3 组件关系图
+
+```mermaid
+classDiagram
+    class IParser {
+        <<interface>>
+        +parse_file(file_path) ParsedCode
+        +extract_functions(code) List~Function~
+        +extract_function_calls(tree, src, file_path) List~FunctionCall~
+        +get_fallback_statistics() Dict
+    }
+    
+    class CParser {
+        -language
+        -parser
+        +parse_file(file_path) ParsedCode
+        +extract_functions(code) List~Function~
+        +extract_function_calls(tree, src, file_path) List~FunctionCall~
+        +get_fallback_statistics() Dict
+    }
+    
+    class IGraphStore {
+        <<interface>>
+        +store_functions(functions) bool
+        +create_call_relationship(caller, callee) bool
+        +store_call_relationships(calls) bool
+        +query_function_calls(function_name) List~str~
+    }
+    
+    class Neo4jGraphStore {
+        -driver
+        +connect(uri, user, password) bool
+        +store_functions(functions) bool
+        +create_call_relationship(caller, callee) bool
+        +store_call_relationships(calls) bool
+        +query_function_calls(function_name) List~str~
+    }
+    
+    class IVectorStore {
+        <<interface>>
+        +store_embeddings(embeddings) bool
+        +similarity_search(query, top_k) List~Dict~
+    }
+    
+    class ChromaVectorStore {
+        -client
+        -collection
+        +store_embeddings(embeddings) bool
+        +similarity_search(query, top_k) List~Dict~
+    }
+    
+    class IEmbeddingEngine {
+        <<interface>>
+        +encode(texts) List~List~float~~
+    }
+    
+    class JinaEmbeddingEngine {
+        -model
+        +encode(texts) List~List~float~~
+    }
+    
+    class IChatBot {
+        <<interface>>
+        +answer_question(question, context) str
+    }
+    
+    class OpenRouterChatBot {
+        -api_key
+        -model
+        +answer_question(question, context) str
+    }
+    
+    class ProjectManager {
+        -config
+        -parser
+        -graph_store
+        -vector_store
+        -qa_service
+        +create_project(repo_path) Project
+        +analyze_project(project) bool
+        +get_project_status(project_id) ProjectStatus
+    }
+    
+    class CodeQAService {
+        -graph_store
+        -vector_store
+        -embedding_engine
+        -chatbot
+        +ask_question(question, context) str
+    }
+    
+    IParser <|.. CParser
+    IGraphStore <|.. Neo4jGraphStore
+    IVectorStore <|.. ChromaVectorStore
+    IEmbeddingEngine <|.. JinaEmbeddingEngine
+    IChatBot <|.. OpenRouterChatBot
+    
+    ProjectManager --> IParser
+    ProjectManager --> IGraphStore
+    ProjectManager --> IVectorStore
+    ProjectManager --> CodeQAService
+    
+    CodeQAService --> IGraphStore
+    CodeQAService --> IVectorStore
+    CodeQAService --> IEmbeddingEngine
+    CodeQAService --> IChatBot
+    
+    ChromaVectorStore --> IEmbeddingEngine
+```
+
+### 2.4 核心接口设计 (SOLID原则)
 
 ```python
-# core/interfaces.py - 5个核心接口
+# core/interfaces.py - 5个核心接口 (遵循SOLID原则)
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional, Literal
@@ -455,7 +665,6 @@ app:
 neo4j:
   uri: "bolt://localhost:7687"
   user: "neo4j"
-  password: "your_password"  # 请修改为实际密码
   database: "neo4j"
 
 # Chroma向量数据库配置
@@ -579,9 +788,82 @@ CREATE TABLE configurations (
 );
 ```
 
-## 6. CLI应用设计
+## 6. 系统工作流详细设计
 
-### 6.1 Click命令结构
+### 6.1 项目初始化序列图
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant CLI as 命令行界面
+    participant PM as 项目管理器
+    participant Parser as 代码解析器
+    participant GraphDB as Neo4j图数据库
+    participant EmbEngine as 嵌入引擎
+    participant VectorDB as Chroma向量数据库
+    
+    User->>CLI: analyze /path/to/repo
+    CLI->>PM: create_project(repo_path)
+    PM->>PM: 初始化项目配置
+    PM-->>User: 显示进度条
+    
+    par 文件解析与图数据库存储
+        PM->>Parser: parse_directory(repo_path)
+        loop 对每个C文件
+            Parser->>Parser: parse_file(file)
+            Parser->>Parser: extract_functions(code)
+            Parser->>Parser: extract_function_calls(tree)
+            Parser->>GraphDB: store_functions(functions)
+            Parser->>GraphDB: store_call_relationships(calls)
+        end
+    and 代码嵌入与向量存储
+        PM->>Parser: get_parsed_code()
+        PM->>EmbEngine: encode_batch(code_chunks)
+        EmbEngine->>VectorDB: store_embeddings(embeddings)
+    end
+    
+    PM->>PM: update_project_status("completed")
+    PM-->>User: 显示完成信息
+```
+
+### 6.2 问答交互序列图
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant CLI as 命令行界面
+    participant QA as 问答服务
+    participant LLM as 聊天机器人
+    participant GraphDB as Neo4j图数据库
+    participant VectorDB as Chroma向量数据库
+    
+    User->>CLI: query "函数X的作用是什么?"
+    CLI->>QA: ask_question(question, context)
+    
+    QA->>LLM: detect_intent(question)
+    LLM-->>QA: 返回意图
+    
+    par 图数据库检索
+        QA->>GraphDB: query_function_info(function_name)
+        GraphDB-->>QA: 返回函数信息和调用关系
+    and 向量数据库检索
+        QA->>VectorDB: similarity_search(question, top_k=5)
+        VectorDB-->>QA: 返回相似代码块
+    end
+    
+    QA->>LLM: evaluate_results(graph_results, vector_results)
+    LLM-->>QA: 返回最佳上下文
+    
+    QA->>LLM: generate_answer(question, best_context)
+    LLM-->>QA: 返回生成的回答
+    
+    QA-->>CLI: 返回回答
+    CLI-->>User: 显示回答
+```
+
+## 7. CLI应用设计
+
+### 7.1 Click命令结构
 
 ```python
 # cli/main.py
@@ -622,7 +904,7 @@ if __name__ == '__main__':
     cli()
 ```
 
-### 6.2 外部API设计
+### 7.2 外部API设计
 
 ```python
 # 命令行接口
@@ -638,9 +920,60 @@ result = analyzer.analyze_repository("/path/to/repo")
 answer = analyzer.ask_question("问题", context_limit=5)
 ```
 
-## 7. POC成功标准
+## 8. 里程碑与故事规划
 
-### 7.1 技术验证目标
+### 8.1 项目里程碑规划
+
+```mermaid
+gantt
+    title C语言智能代码分析调试工具 - 里程碑规划
+    dateFormat  YYYY-MM-DD
+    section 基础架构
+    环境搭建              :done, m1, 2025-06-10, 2d
+    解析器实现            :done, m2, 2025-06-12, 3d
+    存储层实现            :done, m3, 2025-06-15, 2d
+    
+    section 核心功能
+    函数调用图            :active, m4, 2025-06-17, 3d
+    代码嵌入与检索        :active, m5, 2025-06-20, 3d
+    问答系统              :m6, 2025-06-23, 4d
+    
+    section CLI工具
+    命令行实现            :m7, 2025-06-27, 2d
+    交互式问答            :m8, 2025-06-29, 2d
+    
+    section 测试与优化
+    集成测试              :m9, 2025-07-01, 3d
+    性能优化              :m10, 2025-07-04, 3d
+```
+
+### 8.2 关键故事与目标
+
+| Epic | Story | 描述 | 状态 | 对应工作流程 |
+|------|-------|-----|------|------------|
+| 1 - 基础架构 | 1.1 | 环境搭建 | ✅ 已完成 | 项目初始化 |
+| 1 - 基础架构 | 1.2 | C语言解析器 | ✅ 已完成 | 代码解析 |
+| 1 - 基础架构 | 1.3 | Neo4j存储实现 | ✅ 已完成 | 代码解析->图数据库存储 |
+| 1 - 基础架构 | 1.4 | Chroma存储实现 | ✅ 已完成 | 代码解析->向量嵌入->存储 |
+| 2 - 核心功能 | 2.1 | 函数调用图实现 | 🔄 进行中 | 代码解析->图数据库存储->查询 |
+| 2 - 核心功能 | 2.2 | 依赖分析服务 | 🔄 进行中 | 代码解析->图数据库查询 |
+| 2 - 核心功能 | 2.3 | 实用CLI工具 | 📋 待开始 | 命令行界面->项目管理器 |
+| 3 - 问答系统 | 3.1 | 代码问答服务 | 📋 待开始 | 完整问答交互流程 |
+| 3 - 问答系统 | 3.2 | 交互式问答 | 📋 待开始 | 问答交互流程 |
+
+### 8.3 实现目标工作流的关键故事
+
+要实现您描述的完整工作流程，需要完成以下关键故事：
+
+1. **项目创建与初始化**：Story 1.1（环境搭建）+ Story 2.3（实用CLI工具）
+2. **代码解析与存储**：Story 1.2（C语言解析器）+ Story 1.3（Neo4j存储）+ Story 1.4（Chroma存储）
+3. **问答交互**：Story 3.1（代码问答服务）+ Story 3.2（交互式问答）
+
+**当前状态**：基础架构已完成，核心功能部分完成，CLI工具和问答系统待实现。要达成完整工作流，需优先完成Story 2.3和Story 3.1。
+
+## 9. POC成功标准
+
+### 9.1 技术验证目标
 
 1. **端到端工作流验证**
    - 解析简单C文件 (hello.c) ✓
@@ -659,22 +992,22 @@ answer = analyzer.ask_question("问题", context_limit=5)
    - 代码语义搜索
    - 基于上下文的智能问答
 
-### 7.2 性能基线 (POC阶段)
+### 9.2 性能基线 (POC阶段)
 
 - **单文件解析:** < 5秒 (100行C代码)
 - **向量生成:** < 10秒 (10个函数)
 - **问答响应:** < 15秒 (包含API调用)
 - **内存使用:** < 2GB (嵌入模型加载)
 
-### 7.3 质量标准 (简化)
+### 9.3 质量标准 (简化)
 
 - **测试覆盖率:** 60% (降低至POC标准)
 - **代码质量:** flake8 + mypy通过
 - **文档完整性:** 核心接口和使用说明
 
-## 8. 风险评估和缓解
+## 10. 风险评估和缓解
 
-### 8.1 Linux环境风险
+### 10.1 Linux环境风险
 
 | 风险项 | 概率 | 影响 | 缓解措施 |
 |--------|------|------|----------|
@@ -682,7 +1015,7 @@ answer = analyzer.ask_question("问题", context_limit=5)
 | 模型下载失败 | 低 | 中 | 提供离线模型包，使用代理下载 |
 | 权限问题 | 中 | 中 | 使用用户目录，避免系统目录操作 |
 
-### 8.2 技术风险
+### 10.2 技术风险
 
 | 风险项 | 概率 | 影响 | 缓解措施 |
 |--------|------|------|----------|
@@ -692,6 +1025,6 @@ answer = analyzer.ask_question("问题", context_limit=5)
 
 ---
 
-**文档版本:** v1.3  
-**最后更新:** 2025-06-18  
-**下一步:** 开始Story 1.1环境搭建
+**文档版本:** v1.4  
+**最后更新:** 2025-06-19  
+**下一步:** 实现Story 2.3实用CLI工具

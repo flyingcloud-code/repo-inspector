@@ -3,217 +3,143 @@
 定义系统中各个组件的抽象接口，遵循SOLID原则中的接口隔离原则
 """
 from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Protocol
 from pathlib import Path
 
 from .data_models import (
     Function, FileInfo, ParsedCode, EmbeddingData, 
     QueryResult, FunctionCallGraph, EmbeddingVector,
     FunctionCall, FallbackStats, FolderStructure, 
-    Documentation, AnalysisResult
+    Documentation, AnalysisResult, FileDependency, ModuleDependency,
+    ProjectDependencies
 )
 
 
-class IParser(ABC):
-    """代码解析器接口
+class IParser(Protocol):
+    """解析器接口"""
     
-    负责解析C语言源文件，提取函数定义、调用关系等结构信息
-    """
-    
-    @abstractmethod
     def parse_file(self, file_path: Path) -> ParsedCode:
-        """解析单个C文件
+        """解析单个文件"""
+        ...
+    
+    def parse_directory(self, directory_path: Path, file_pattern: str = "*.c") -> List[ParsedCode]:
+        """解析目录中的所有匹配文件"""
+        ...
+    
+    def extract_function_calls(self, function_code: str) -> List[FunctionCall]:
+        """提取函数调用关系"""
+        ...
+
+    def extract_file_dependencies(self, file_path: Path) -> List[FileDependency]:
+        """提取文件依赖关系（主要是#include语句）
         
         Args:
-            file_path: C源文件路径
+            file_path: 文件路径
             
         Returns:
-            ParsedCode: 解析后的代码结构
-            
-        Raises:
-            FileNotFoundError: 文件不存在
-            ParseError: 解析失败
+            List[FileDependency]: 文件依赖关系列表
         """
-        pass
+        ...
     
-    @abstractmethod
-    def parse_directory(self, dir_path: Path, pattern: str = "*.c") -> List[ParsedCode]:
-        """解析目录下的所有C文件
+    def analyze_project_dependencies(self, project_path: Path) -> ProjectDependencies:
+        """分析项目依赖关系
         
         Args:
-            dir_path: 目录路径
-            pattern: 文件匹配模式
+            project_path: 项目路径
             
         Returns:
-            List[ParsedCode]: 解析结果列表
+            ProjectDependencies: 项目依赖关系
         """
-        pass
-    
-    @abstractmethod
-    def extract_functions(self, source_code: str, file_path: str) -> List[Function]:
-        """从源代码中提取函数信息
-        
-        Args:
-            source_code: C源代码字符串
-            file_path: 文件路径（用于记录）
-            
-        Returns:
-            List[Function]: 函数信息列表
-        """
-        pass
-    
-    @abstractmethod
-    def extract_function_calls(self, source_code: str, file_path: str) -> List[FunctionCall]:
-        """提取函数调用关系
-        
-        Args:
-            source_code: C源代码字符串
-            file_path: 文件路径（用于记录）
-            
-        Returns:
-            List[FunctionCall]: 函数调用关系列表
-            
-        Raises:
-            ParseError: 解析失败
-        """
-        pass
-    
-    @abstractmethod
-    def get_fallback_statistics(self) -> FallbackStats:
-        """获取fallback统计信息
-        
-        Returns:
-            FallbackStats: fallback使用统计
-        """
-        pass
+        ...
 
 
-class IGraphStore(ABC):
-    """图数据库存储接口
+class IGraphStore(Protocol):
+    """图存储接口"""
     
-    负责将代码结构信息存储到Neo4j图数据库
-    扩展版本 - 支持函数调用关系分析
-    """
-    
-    @abstractmethod
     def connect(self, uri: str, user: str, password: str) -> bool:
-        """连接到图数据库
-        
-        Args:
-            uri: 数据库URI
-            user: 用户名
-            password: 密码
-            
-        Returns:
-            bool: 连接是否成功
-        """
-        pass
+        """连接到图数据库"""
+        ...
     
-    @abstractmethod
-    def store_parsed_code(self, parsed_code: ParsedCode) -> bool:
-        """存储解析后的代码结构（文件+函数+关系）
-        
-        Args:
-            parsed_code: 解析后的代码对象
-            
-        Returns:
-            bool: 存储是否成功
-        """
-        pass
+    def close(self) -> bool:
+        """关闭连接"""
+        ...
     
-    @abstractmethod
     def clear_database(self) -> bool:
-        """清空数据库（测试用）
-        
-        Returns:
-            bool: 清空是否成功
-        """
-        pass
+        """清空数据库"""
+        ...
     
-    # Story 2.1 新增方法
-    @abstractmethod
-    def store_call_relationship(self, caller: str, callee: str, call_type: str) -> bool:
-        """存储函数调用关系
-        
-        Args:
-            caller: 调用者函数名
-            callee: 被调用函数名
-            call_type: 调用类型 ('direct', 'pointer', 'member', 'recursive')
-            
-        Returns:
-            bool: 存储是否成功
-        """
-        pass
+    def store_parsed_code(self, parsed_code: ParsedCode) -> bool:
+        """存储解析后的代码"""
+        ...
     
-    @abstractmethod
-    def store_call_relationships_batch(self, call_relationships: List[FunctionCall]) -> bool:
-        """批量存储函数调用关系
-        
-        Args:
-            call_relationships: 函数调用关系列表
-            
-        Returns:
-            bool: 存储是否成功
-        """
-        pass
+    def query_function(self, function_name: str) -> Optional[Dict[str, Any]]:
+        """查询函数"""
+        ...
     
-    @abstractmethod
-    def query_function_calls(self, function_name: str) -> List[str]:
-        """查询函数直接调用的其他函数
-        
-        Args:
-            function_name: 函数名
-            
-        Returns:
-            List[str]: 被调用函数名列表
-        """
-        pass
+    def query_file(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """查询文件"""
+        ...
     
-    @abstractmethod
-    def query_function_callers(self, function_name: str) -> List[str]:
-        """查询调用指定函数的其他函数
-        
-        Args:
-            function_name: 函数名
-            
-        Returns:
-            List[str]: 调用者函数名列表
-        """
-        pass
+    def store_call_relationship(self, caller_name: str, callee_name: str, call_type: str = "direct", 
+                              line_no: int = 0, context: str = "") -> bool:
+        """存储函数调用关系"""
+        ...
     
-    @abstractmethod
     def query_call_graph(self, root_function: str, max_depth: int = 5) -> Dict[str, Any]:
-        """生成函数调用图谱
+        """生成函数调用图谱"""
+        ...
+
+    def store_file_dependencies(self, dependencies: List[FileDependency]) -> bool:
+        """存储文件依赖关系
         
         Args:
-            root_function: 根函数名
-            max_depth: 最大查询深度
+            dependencies: 文件依赖关系列表
             
         Returns:
-            Dict[str, Any]: 调用图谱数据结构
+            bool: 是否成功
         """
-        pass
+        ...
     
-    @abstractmethod
-    def find_unused_functions(self) -> List[str]:
-        """查找未被调用的函数
-        
-        Returns:
-            List[str]: 未使用函数名列表
-        """
-        pass
-    
-    @abstractmethod
-    def store_folder_structure(self, folder_structure: FolderStructure) -> bool:
-        """存储文件夹结构信息
+    def store_module_dependencies(self, dependencies: List[ModuleDependency]) -> bool:
+        """存储模块依赖关系
         
         Args:
-            folder_structure: 文件夹结构数据
+            dependencies: 模块依赖关系列表
             
         Returns:
-            bool: 存储是否成功
+            bool: 是否成功
         """
-        pass
+        ...
+    
+    def query_file_dependencies(self, file_path: str = None) -> List[Dict[str, Any]]:
+        """查询文件依赖关系
+        
+        Args:
+            file_path: 文件路径，如果为None则查询所有文件依赖
+            
+        Returns:
+            List[Dict[str, Any]]: 文件依赖关系列表
+        """
+        ...
+    
+    def query_module_dependencies(self, module_name: str = None) -> List[Dict[str, Any]]:
+        """查询模块依赖关系
+        
+        Args:
+            module_name: 模块名称，如果为None则查询所有模块依赖
+            
+        Returns:
+            List[Dict[str, Any]]: 模块依赖关系列表
+        """
+        ...
+    
+    def detect_circular_dependencies(self) -> List[List[str]]:
+        """检测循环依赖
+        
+        Returns:
+            List[List[str]]: 循环依赖链列表
+        """
+        ...
 
 
 class IVectorStore(ABC):
@@ -623,4 +549,122 @@ class IMetaDataStore(ABC):
         Returns:
             Dict[str, Any]: 性能总结数据
         """
-        pass 
+        pass
+
+
+# 添加新接口
+class ICallGraphService(Protocol):
+    """函数调用图谱服务接口"""
+    
+    def analyze_file(self, file_path: Path) -> List[FunctionCall]:
+        """分析文件中的函数调用关系
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            List[FunctionCall]: 函数调用关系列表
+        """
+        ...
+    
+    def analyze_project(self, project_path: Path) -> Dict[str, List[FunctionCall]]:
+        """分析项目中的函数调用关系
+        
+        Args:
+            project_path: 项目路径
+            
+        Returns:
+            Dict[str, List[FunctionCall]]: 按文件分组的函数调用关系
+        """
+        ...
+    
+    def generate_call_graph(self, root_function: str, max_depth: int = 5, 
+                          output_format: str = "mermaid") -> str:
+        """生成函数调用图
+        
+        Args:
+            root_function: 根函数名
+            max_depth: 最大深度
+            output_format: 输出格式（mermaid, json, ascii, html）
+            
+        Returns:
+            str: 调用图
+        """
+        ...
+    
+    def export_call_graph(self, root_function: str, output_path: Path, 
+                        output_format: str = "mermaid") -> bool:
+        """导出函数调用图
+        
+        Args:
+            root_function: 根函数名
+            output_path: 输出路径
+            output_format: 输出格式
+            
+        Returns:
+            bool: 导出是否成功
+        """
+        ...
+
+
+class IDependencyService(Protocol):
+    """依赖关系分析服务接口"""
+    
+    def analyze_file(self, file_path: Path) -> List[FileDependency]:
+        """分析文件依赖关系
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            List[FileDependency]: 文件依赖关系列表
+        """
+        ...
+    
+    def analyze_project(self, project_path: Path) -> ProjectDependencies:
+        """分析项目依赖关系
+        
+        Args:
+            project_path: 项目路径
+            
+        Returns:
+            ProjectDependencies: 项目依赖关系
+        """
+        ...
+    
+    def generate_dependency_graph(self, output_format: str = "mermaid", 
+                                scope: str = "module", focus_item: str = None) -> str:
+        """生成依赖图
+        
+        Args:
+            output_format: 输出格式（mermaid, json, ascii, html）
+            scope: 作用域（file, module）
+            focus_item: 聚焦项（文件路径或模块名）
+            
+        Returns:
+            str: 依赖图
+        """
+        ...
+    
+    def export_dependency_graph(self, output_path: Path, output_format: str = "mermaid", 
+                              scope: str = "module", focus_item: str = None) -> bool:
+        """导出依赖图
+        
+        Args:
+            output_path: 输出路径
+            output_format: 输出格式
+            scope: 作用域
+            focus_item: 聚焦项
+            
+        Returns:
+            bool: 导出是否成功
+        """
+        ...
+    
+    def get_circular_dependencies(self) -> List[List[str]]:
+        """获取循环依赖
+        
+        Returns:
+            List[List[str]]: 循环依赖链列表
+        """
+        ... 
