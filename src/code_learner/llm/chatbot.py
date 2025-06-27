@@ -187,10 +187,10 @@ class OpenRouterChatBot(IChatBot):
         ]
         
         # 添加上下文信息
-        if context:
+        if context and context.strip():
             messages.append({
                 "role": "user",
-                "content": f"相关代码上下文：\n```c\n{context}\n```"
+                "content": f"相关代码上下文：\n{context}"
             })
         
         # 添加用户问题

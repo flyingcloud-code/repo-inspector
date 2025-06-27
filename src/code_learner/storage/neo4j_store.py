@@ -503,32 +503,139 @@ class Neo4jGraphStore(IGraphStore):
             raise StorageError("call_relationship_batch", str(e))
     
     def query_function_calls(self, function_name: str):
-        """查询函数直接调用的其他函数 - 占位实现
+        """查询函数直接调用的其他函数
         
         Args:
             function_name: 函数名
             
         Returns:
             List[str]: 被调用函数名列表
-            
-        Raises:
-            NotImplementedError: 功能将在Story 2.1.5中实现
         """
-        raise NotImplementedError("query_function_calls will be implemented in Story 2.1.5")
+        if not self.driver:
+            logger.error("数据库连接未初始化")
+            return []
+        
+        try:
+            with self.driver.session() as session:
+                # 查询函数直接调用的其他函数
+                query = """
+                MATCH (caller:Function {name: $name})-[:CALLS]->(callee:Function)
+                RETURN callee.name as callee
+                """
+                result = session.run(query, name=function_name)
+                
+                # 提取被调用函数名
+                callees = [record["callee"] for record in result.data()]
+                
+                logger.debug(f"函数 '{function_name}' 调用了 {len(callees)} 个函数")
+                return callees
+                
+        except Exception as e:
+            logger.error(f"查询函数调用失败: {e}")
+            return []
     
     def query_function_callers(self, function_name: str):
-        """查询调用指定函数的其他函数 - 占位实现
+        """查询调用指定函数的其他函数
         
         Args:
             function_name: 函数名
             
         Returns:
             List[str]: 调用者函数名列表
-            
-        Raises:
-            NotImplementedError: 功能将在Story 2.1.5中实现
         """
-        raise NotImplementedError("query_function_callers will be implemented in Story 2.1.5")
+        if not self.driver:
+            logger.error("数据库连接未初始化")
+            return []
+        
+        try:
+            with self.driver.session() as session:
+                # 查询调用指定函数的其他函数
+                query = """
+                MATCH (caller:Function)-[:CALLS]->(callee:Function {name: $name})
+                RETURN caller.name as caller
+                """
+                result = session.run(query, name=function_name)
+                
+                # 提取调用者函数名
+                callers = [record["caller"] for record in result.data()]
+                
+                logger.debug(f"函数 '{function_name}' 被 {len(callers)} 个函数调用")
+                return callers
+                
+        except Exception as e:
+            logger.error(f"查询函数被调用失败: {e}")
+            return []
+            
+    def get_function_code(self, function_name: str) -> Optional[str]:
+        """获取函数代码
+        
+        Args:
+            function_name: 函数名
+            
+        Returns:
+            Optional[str]: 函数代码，如果不存在则返回None
+        """
+        if not self.driver:
+            logger.error("数据库连接未初始化")
+            return None
+        
+        try:
+            with self.driver.session() as session:
+                # 单次查询，获取函数代码或位置信息
+                query = """
+                MATCH (f:Function {name: $name})
+                OPTIONAL MATCH (file:File)-[:CONTAINS]->(f)
+                RETURN f.code as code, file.path as file_path, 
+                       f.start_line as start_line, f.end_line as end_line
+                """
+                result = session.run(query, name=function_name)
+                record = result.single()
+                
+                if not record:
+                    logger.warning(f"函数 '{function_name}' 未找到")
+                    return None
+                
+                # 优先使用存储的代码
+                if record.get("code"):
+                    return record["code"]
+                
+                # 如果没有存储代码但有位置信息，从文件读取
+                if record.get("file_path") and record.get("start_line") and record.get("end_line"):
+                    return self._read_function_from_file(
+                        record["file_path"], 
+                        record["start_line"], 
+                        record["end_line"]
+                    )
+                
+                return None
+                    
+        except Exception as e:
+            logger.error(f"从Neo4j检索函数代码失败: {e}")
+            return None
+    
+    def _read_function_from_file(self, file_path: str, start_line: int, end_line: int) -> Optional[str]:
+        """从文件读取函数代码
+        
+        Args:
+            file_path: 文件路径
+            start_line: 起始行（从1开始）
+            end_line: 结束行
+            
+        Returns:
+            Optional[str]: 函数代码
+        """
+        try:
+            with open(file_path, 'r') as f:
+                lines = f.readlines()
+                if start_line <= len(lines) and end_line <= len(lines):
+                    function_code = ''.join(lines[start_line-1:end_line])
+                    return function_code
+                else:
+                    logger.warning(f"文件行数不足: {file_path}, 总行数: {len(lines)}, 请求行: {start_line}-{end_line}")
+                    return None
+        except Exception as e:
+            logger.error(f"读取文件失败: {file_path}, 错误: {e}")
+            return None
     
     def query_call_graph(self, root_function: str, max_depth: int = 5):
         """生成函数调用图谱
@@ -1015,3 +1122,59 @@ class Neo4jGraphStore(IGraphStore):
         except Exception as e:
             logger.error(f"创建数据库约束失败: {e}")
             # 约束创建失败不应该影响整体功能 
+
+    def get_all_code_units(self) -> List[Dict[str, Any]]:
+        """获取所有可嵌入的代码单元（函数和结构体）
+
+        Returns:
+            List[Dict[str, Any]]: 代码单元列表，每个单元包含 name, code, file_path, 等信息
+        
+        Raises:
+            StorageError: 查询失败时抛出异常
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        logger.info("🚚 获取所有可嵌入的代码单元 (Functions, Structs)")
+
+        try:
+            with self.driver.session() as session:
+                result = session.read_transaction(self._get_all_code_units_tx)
+                code_units = [record.data() for record in result]
+                logger.info(f"✅ 成功检索到 {len(code_units)} 个代码单元")
+                return code_units
+
+        except Neo4jError as e:
+            error_msg = f"Neo4j error while fetching code units: {e}"
+            logger.error(f"❌ {error_msg}")
+            raise StorageError("transaction_failed", error_msg)
+            
+        except Exception as e:
+            error_msg = f"Unexpected error while fetching code units: {e}"
+            logger.error(f"❌ {error_msg}")
+            raise StorageError("storage_operation", error_msg)
+
+
+    def _get_all_code_units_tx(self, tx) -> List[Dict[str, Any]]:
+        """获取所有代码单元的事务函数
+        
+        Args:
+            tx: Neo4j事务对象
+            
+        Returns:
+            List[Dict[str, Any]]: 代码单元列表
+        """
+        query = """
+        MATCH (n)
+        WHERE n:Function OR n:Struct
+        RETURN
+            n.name as name,
+            n.code as code,
+            n.file_path as file_path,
+            n.start_line as start_line,
+            n.end_line as end_line,
+            labels(n)[0] as node_type
+        """
+        logger.debug("Executing query to fetch all code units")
+        result = tx.run(query)
+        return result 

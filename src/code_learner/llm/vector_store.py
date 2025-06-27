@@ -117,11 +117,12 @@ class ChromaVectorStore(IVectorStore):
             logger.error(f"❌ 集合创建失败 '{name}': {e}")
             raise DatabaseConnectionError("chromadb", f"Failed to create collection '{name}': {str(e)}")
     
-    def add_embeddings(self, embeddings: List[EmbeddingData]) -> bool:
+    def add_embeddings(self, embeddings: List[EmbeddingData], collection_name: str = "code_embeddings") -> bool:
         """批量添加向量嵌入
         
         Args:
             embeddings: 嵌入数据列表
+            collection_name: 集合名称
             
         Returns:
             bool: 添加是否成功
@@ -131,15 +132,7 @@ class ChromaVectorStore(IVectorStore):
             return True
         
         try:
-            logger.info(f"🚀 开始批量添加 {len(embeddings)} 个向量嵌入")
-            
-            # 默认集合名称
-            collection_name = "code_embeddings"
-            
-            # 如果调用方之前创建了集合且尚未创建默认集合，则使用现有集合
-            if collection_name not in self.collections and self.collections:
-                # 取第一个已存在的集合名称
-                collection_name = next(iter(self.collections.keys()))
+            logger.info(f"🚀 开始批量添加 {len(embeddings)} 个向量嵌入到集合 '{collection_name}'")
             
             # 确保集合存在
             if collection_name not in self.collections:
@@ -323,7 +316,7 @@ class ChromaVectorStore(IVectorStore):
         return self.search_similar(query_vec, top_k=n_results)
     
     # -------------------------- Story 2.1 额外接口 --------------------------
-    def store_function_embeddings(self, functions: List[Function]) -> bool:  # type: ignore
+    def store_function_embeddings(self, functions: List[Function], collection_name: str = "code_embeddings") -> bool:  # type: ignore
         """存储函数级向量嵌入（简化实现）"""
         if not functions:
             return True
@@ -336,12 +329,12 @@ class ChromaVectorStore(IVectorStore):
             for func in functions:
                 emb = engine.encode_function(func)
                 embeddings.append(emb)
-            return self.add_embeddings(embeddings)
+            return self.add_embeddings(embeddings, collection_name)
         except Exception as e:
             logger.error(f"store_function_embeddings failed: {e}")
             return False
     
-    def store_documentation_embeddings(self, documentation):  # type: ignore
+    def store_documentation_embeddings(self, documentation, collection_name: str = "code_embeddings"):  # type: ignore
         """存储文档向量嵌入（简化实现）"""
         try:
             texts: List[str] = []
@@ -364,7 +357,7 @@ class ChromaVectorStore(IVectorStore):
                         metadata={"type": "documentation"}
                     )
                 )
-            return self.add_embeddings(embeddings)
+            return self.add_embeddings(embeddings, collection_name)
         except Exception as e:
             logger.error(f"store_documentation_embeddings failed: {e}")
             return False 

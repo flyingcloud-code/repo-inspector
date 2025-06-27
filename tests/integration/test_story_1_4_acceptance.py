@@ -11,15 +11,15 @@ import shutil
 from pathlib import Path
 from typing import List
 
-from src.code_learner.llm import (
-    JinaEmbeddingEngine,
-    ChromaVectorStore, 
-    OpenRouterChatBot,
-    LLMServiceFactory,
-    CodeQAService
-)
-from src.code_learner.core.data_models import Function
+from src.code_learner.llm.embedding_engine import JinaEmbeddingEngine
+from src.code_learner.llm.vector_store import ChromaVectorStore
+from src.code_learner.llm.chatbot import OpenRouterChatBot, ChatResponse
+from src.code_learner.llm.service_factory import ServiceFactory
+from src.code_learner.llm.code_qa_service import CodeQAService
+from src.code_learner.core.data_models import Function, ParsedCode, FunctionCall
 from src.code_learner.config.config_manager import ConfigManager
+from src.code_learner.storage.neo4j_store import Neo4jGraphStore
+from src.code_learner.llm.code_embedder import CodeEmbedder
 
 
 class TestStory14Acceptance:
@@ -189,47 +189,20 @@ class TestStory14Acceptance:
     
     def test_service_factory_real_services(self):
         """测试服务工厂 - 真实服务"""
-        # 创建配置管理器
-        config_manager = ConfigManager()
-        config = config_manager.get_config()
-        
-        # 设置临时配置
-        config.vector_store.chroma_persist_directory = str(self.test_data_dir / "chroma")
-        
-        # 创建服务工厂
-        factory = LLMServiceFactory(config_manager)
-        
-        # 测试创建所有服务
-        services = factory.create_all_services()
-        
-        assert "embedding_engine" in services, "应该包含嵌入引擎"
-        assert "vector_store" in services, "应该包含向量存储"
-        assert "chatbot" in services, "应该包含聊天机器人"
+        # 获取服务
+        embedding_engine = ServiceFactory.get_embedding_engine()
+        vector_store = ServiceFactory.create_vector_store(ServiceFactory())
+        chatbot = ServiceFactory.get_chatbot()
         
         # 验证服务可用性
-        embedding_engine = services["embedding_engine"]
         assert hasattr(embedding_engine, "encode_text"), "嵌入引擎应有encode_text方法"
-        
-        vector_store = services["vector_store"]
         assert hasattr(vector_store, "search_similar"), "向量存储应有search_similar方法"
-        
-        chatbot = services["chatbot"]
         assert hasattr(chatbot, "ask_question"), "聊天机器人应有ask_question方法"
-        assert hasattr(chatbot, "generate_summary"), "聊天机器人应有generate_summary方法"
-        
-        # 测试服务状态
-        status = factory.get_services_status()
-        assert all(service_status.get("status") != "not_created" for service_status in status.values()), "所有服务都应该已创建"
     
     def test_code_qa_service_integration(self):
         """测试代码问答服务集成 - 端到端测试"""
-        # 创建配置管理器
-        config_manager = ConfigManager()
-        config = config_manager.get_config()
-        config.vector_store.chroma_persist_directory = str(self.test_data_dir / "chroma")
-        
         # 创建代码问答服务
-        qa_service = CodeQAService(LLMServiceFactory(config_manager))
+        qa_service = CodeQAService(ServiceFactory())
         
         # 测试服务可用性（延迟加载）
         assert qa_service.embedding_engine is not None, "嵌入引擎应该可用"
@@ -260,48 +233,30 @@ class TestStory14Acceptance:
         assert "main" in summary.lower() or "hello" in summary.lower(), "摘要应该包含相关内容"
     
     def test_repo_level_processing_capability(self):
-        """测试repo级别处理能力"""
-        # 创建更多测试函数模拟repo级别
-        test_functions = []
-        
-        # 模拟OpenSBI项目的一些函数
-        opensbi_functions = [
-            ("sbi_init", "lib/sbi/sbi_init.c", "void sbi_init(struct sbi_scratch *scratch) { /* init code */ }"),
-            ("sbi_trap_handler", "lib/sbi/sbi_trap.c", "int sbi_trap_handler(struct sbi_trap_regs *regs) { /* trap handling */ }"),
-            ("sbi_console_putc", "lib/sbi/sbi_console.c", "void sbi_console_putc(char ch) { /* console output */ }"),
-            ("sbi_timer_init", "lib/sbi/sbi_timer.c", "int sbi_timer_init() { /* timer initialization */ }"),
-            ("sbi_ipi_send", "lib/sbi/sbi_ipi.c", "int sbi_ipi_send(u32 target_cpu) { /* send IPI */ }")
-        ]
-        
-        for i, (name, file_path, code) in enumerate(opensbi_functions):
-            func = Function(
-                name=name,
-                file_path=file_path,
-                start_line=i * 10 + 1,
-                end_line=i * 10 + 5,
-                code=code
-            )
-            test_functions.append(func)
-        
-        # 测试批量处理能力
-        config_manager = ConfigManager()
-        config = config_manager.get_config()
-        config.vector_store.chroma_persist_directory = str(self.test_data_dir / "chroma_repo")
-        
-        qa_service = CodeQAService(LLMServiceFactory(config_manager))
+        """测试仓库级处理能力 - 端到端"""
+        # 创建代码问答服务
+        qa_service = CodeQAService(ServiceFactory())
         
         # 测试批量编码（模拟repo级别处理）
-        texts = [func.code for func in test_functions]
-        embeddings = qa_service.embedding_engine.encode_batch(texts)
+        repo_path = self.test_data_dir / "repo"
+        repo_path.mkdir()
+        (repo_path / "main.c").write_text("int main() { return 0; }")
+        (repo_path / "math.c").write_text("int add(int a, int b) { return a + b; }")
         
-        assert len(embeddings) == len(test_functions), "批量编码结果数量应匹配"
-        assert all(len(emb) > 0 for emb in embeddings), "所有嵌入向量都不能为空"
+        # 使用CodeEmbedder处理
+        embedder = CodeEmbedder(
+            embedding_engine=ServiceFactory.get_embedding_engine(),
+            vector_store=ServiceFactory.create_vector_store(ServiceFactory()),
+            collection_name="repo_test"
+        )
         
-        # 验证性能要求：批量处理应该在合理时间内完成
-        # 注意：这里不设置严格的时间限制，因为网络和模型加载时间可能变化
+        success = embedder.process_directory(str(repo_path))
+        assert success, "仓库级嵌入失败"
         
-        print(f"✅ 成功处理 {len(test_functions)} 个函数的批量嵌入")
-        print(f"📊 嵌入维度: {len(embeddings[0]) if embeddings else 0}")
+        # 测试问答
+        question = "这个项目是做什么的？"
+        answer = qa_service.ask_code_question(question)
+        assert len(answer) > 0, "仓库级问答失败"
 
 
 if __name__ == "__main__":

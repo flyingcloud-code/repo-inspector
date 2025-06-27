@@ -205,3 +205,6 @@ logs/*
 reference_code_repo/opensbi
 .cursor/
 uv.lock
+data/chroma/
+data/embeddings_cache/
+data/*  

@@ -48,6 +48,11 @@ code-repo-learn = "code_learner.cli.cli:main"
 call-graph = "code_learner.cli.call_graph_cli:main"
 dependency-graph = "code_learner.cli.dependency_cli:main"
 code-learner = "code_learner.cli.code_analyzer_cli:main"
+code-embed = "code_learner.commands.embed_code:main"
+
+[project.urls]
+Homepage = "https://github.com/your-username/code-repo-learner"
+Issues = "https://github.com/your-username/code-repo-learner/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -56,11 +61,11 @@ where = ["src"]
 "" = "src"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
 
 [tool.mypy]
 python_version = "3.11"

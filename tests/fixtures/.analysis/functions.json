@@ -1,5 +1,19 @@
 [
   {
+    "name": "hello",
+    "file_path": "tests/fixtures/hello.c",
+    "start_line": 3,
+    "end_line": 5,
+    "calls": []
+  },
+  {
+    "name": "main",
+    "file_path": "tests/fixtures/hello.c",
+    "start_line": 7,
+    "end_line": 10,
+    "calls": []
+  },
+  {
     "name": "fibonacci",
     "file_path": "tests/fixtures/complex.c",
     "start_line": 4,
@@ -21,17 +35,17 @@
     "calls": []
   },
   {
-    "name": "hello",
-    "file_path": "tests/fixtures/hello.c",
+    "name": "test_func_one",
+    "file_path": "tests/fixtures/embedding_test_code.c",
     "start_line": 3,
     "end_line": 5,
     "calls": []
   },
   {
-    "name": "main",
-    "file_path": "tests/fixtures/hello.c",
+    "name": "test_func_two",
+    "file_path": "tests/fixtures/embedding_test_code.c",
     "start_line": 7,
-    "end_line": 10,
+    "end_line": 9,
     "calls": []
   }
 ]
