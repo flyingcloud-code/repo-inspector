@@ -27,14 +27,21 @@ class CodeQAService:
     支持repo级别的智能代码理解和交互
     """
     
-    def __init__(self, service_factory: Optional[ServiceFactory] = None):
-        """初始化代码问答服务"""
+    def __init__(self, service_factory: Optional[ServiceFactory] = None, project_id: str = None):
+        """初始化代码问答服务
+        
+        Args:
+            service_factory: 服务工厂
+            project_id: 项目ID，用于项目隔离
+        """
         self.service_factory = service_factory or ServiceFactory()
+        self.project_id = project_id
         
         # 延迟初始化服务
         self._embedding_engine: Optional[JinaEmbeddingEngine] = None
         self._vector_store: Optional[ChromaVectorStore] = None
         self._chatbot: Optional[OpenRouterChatBot] = None
+        self._graph_store: Optional = None
         
     @property
     def embedding_engine(self) -> JinaEmbeddingEngine:
@@ -47,7 +54,7 @@ class CodeQAService:
     def vector_store(self) -> ChromaVectorStore:
         """获取向量存储（延迟加载）"""
         if self._vector_store is None:
-            self._vector_store = self.service_factory.create_vector_store()
+            self._vector_store = self.service_factory.create_vector_store(project_id=self.project_id)
         return self._vector_store
     
     @property
@@ -56,6 +63,13 @@ class CodeQAService:
         if self._chatbot is None:
             self._chatbot = self.service_factory.get_chatbot()
         return self._chatbot
+    
+    @property
+    def graph_store(self):
+        """获取图存储（延迟加载）"""
+        if self._graph_store is None:
+            self._graph_store = self.service_factory.get_graph_store(project_id=self.project_id)
+        return self._graph_store
     
     def ask_code_question(self, question: str) -> str:
         """询问代码相关问题 - 简化版本"""
@@ -145,8 +159,8 @@ class CodeQAService:
         """
         context = ""
         try:
-            # 获取Neo4j图存储
-            graph_store = self.service_factory.get_graph_store()
+            # 使用项目特定的图存储
+            graph_store = self.graph_store
             
             # 从Neo4j检索函数代码
             function_code = graph_store.get_function_code(function_name)

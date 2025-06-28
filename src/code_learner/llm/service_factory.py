@@ -66,14 +66,21 @@ class ServiceFactory:
         return cls._services["parser"]
 
     @classmethod
-    def get_graph_store(cls) -> IGraphStore:
-        """获取图存储实例"""
-        if "graph_store" not in cls._services:
-            store = Neo4jGraphStore()
+    def get_graph_store(cls, project_id: str = None) -> IGraphStore:
+        """获取图存储实例
+        
+        Args:
+            project_id: 项目ID，用于项目隔离
+        """
+        # 如果有项目ID，使用带项目ID的键来缓存不同的实例
+        cache_key = f"graph_store_{project_id}" if project_id else "graph_store"
+        
+        if cache_key not in cls._services:
+            store = Neo4jGraphStore(project_id=project_id)
             if not store.connect():
                 raise ConnectionError("无法连接到Neo4j数据库")
-            cls._services["graph_store"] = store
-        return cls._services["graph_store"]
+            cls._services[cache_key] = store
+        return cls._services[cache_key]
 
     @classmethod
     def get_call_graph_service(cls) -> ICallGraphService:
@@ -106,14 +113,20 @@ class ServiceFactory:
         cls._services.clear()
         logger.info("所有服务实例已重置")
 
-    def create_vector_store(self) -> ChromaVectorStore:
+    def create_vector_store(self, project_id: str = None) -> ChromaVectorStore:
         """创建向量存储
         
+        Args:
+            project_id: 项目ID，用于项目隔离
+            
         Returns:
             ChromaVectorStore: 向量存储实例
         """
-        if "vector_store" in self._services:
-            return self._services["vector_store"]
+        # 如果有项目ID，使用带项目ID的键来缓存不同的实例
+        cache_key = f"vector_store_{project_id}" if project_id else "vector_store"
+        
+        if cache_key in self._services:
+            return self._services[cache_key]
         
         try:
             logger.info("🏭 创建向量存储服务")
@@ -125,19 +138,20 @@ class ServiceFactory:
                 "collection_name": config.vector_store.chroma_collection_name
             }
             
-            # 创建向量存储
+            # 创建向量存储，传入项目ID
             store = ChromaVectorStore(
-                persist_directory=vector_config.get("persist_directory", "./data/chroma")
+                persist_directory=vector_config.get("persist_directory", "./data/chroma"),
+                project_id=project_id
             )
             
-            # 创建默认集合
+            # 创建默认集合（会自动使用项目ID前缀）
             collection_name = vector_config.get("collection_name", "code_embeddings")
             store.create_collection(collection_name)
             
             # 缓存服务实例
-            self._services["vector_store"] = store
+            self._services[cache_key] = store
             
-            logger.info(f"✅ 向量存储创建成功: {collection_name}")
+            logger.info(f"✅ 向量存储创建成功: {store.get_collection_name(collection_name)}")
             return store
             
         except Exception as e:

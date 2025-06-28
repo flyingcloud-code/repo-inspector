@@ -1,139 +1,205 @@
-import pytest
+"""
+嵌入管道集成测试
+
+测试代码嵌入管道在不同项目中的隔离效果
+"""
 import os
-import sys
-import subprocess
-import time
+import unittest
+import shutil
+import tempfile
+import uuid
+from pathlib import Path
 
-# 调整路径以允许从项目根目录导入
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from src.code_learner.project.project_manager import ProjectManager
+from src.code_learner.llm.vector_store import ChromaVectorStore
+from src.code_learner.llm.code_chunker import CodeChunker
+from src.code_learner.llm.code_embedder import CodeEmbedder
+from src.code_learner.llm.embedding_engine import JinaEmbeddingEngine
 
-from code_learner.storage.neo4j_store import Neo4jGraphStore
-from code_learner.llm.vector_store import ChromaVectorStore
-from code_learner.core.data_models import ParsedCode, Function, FileInfo
 
-FIXTURE_FILE = "tests/fixtures/embedding_test_code.c"
+class TestEmbeddingPipeline(unittest.TestCase):
+    """嵌入管道集成测试类"""
 
-@pytest.fixture(scope="module")
-def neo4j_store():
-    """提供一个连接到数据库的 Neo4jGraphStore 实例"""
-    store = Neo4jGraphStore()
-    if not store.connect():
-        pytest.fail("无法连接到 Neo4j，请确保数据库正在运行并已配置。")
-    
-    # 清理数据库以进行测试
-    store.clear_database()
-    yield store
-    
-    # 测试后再次清理
-    store.clear_database()
-    store.close()
-
-@pytest.fixture(scope="module")
-def vector_store():
-    """提供一个 ChromaVectorStore 实例"""
-    # 使用一个测试专用的集合
-    store = ChromaVectorStore(persist_directory="./data/test_chroma")
-    return store
-
-def setup_test_data(store: Neo4jGraphStore, temp_dir: Path):
-    """向 Neo4j 数据库中注入测试数据"""
-    # 定义虚拟路径和真实路径
-    virtual_path1 = "/test/file1.c"
-    real_path1 = temp_dir / "test" / "file1.c"
-    real_path1.touch()
-
-    virtual_path2 = "/test/file2.c"
-    real_path2 = temp_dir / "test" / "file2.c"
-    real_path2.touch()
-
-    # 创建两个函数
-    func1 = Function(
-        name="test_func_one",
-        code="void test_func_one() {\\n  printf(\\"Hello\\");\\n}",
-        start_line=1,
-        end_line=3,
-        file_path=str(real_path1)
-    )
-    func2 = Function(
-        name="test_func_two",
-        code="int test_func_two(int a, int b) {\\n  return a + b;\\n}",
-        start_line=5,
-        end_line=7,
-        file_path=str(real_path2) # 使用真实路径
-    )
-    
-    # 创建文件信息和解析后的代码对象
-    file1_info = FileInfo.from_path(real_path1)
-    # 确保文件信息中的路径是我们在数据库中期望的路径
-    file1_info.path = func1.file_path 
-    parsed_code1 = ParsedCode(file_info=file1_info, functions=[func1])
-
-    file2_info = FileInfo.from_path(real_path2)
-    file2_info.path = func2.file_path
-    parsed_code2 = ParsedCode(file_info=file2_info, functions=[func2])
-
-    # 存储到数据库
-    assert store.store_parsed_code(parsed_code1)
-    assert store.store_parsed_code(parsed_code2)
-
-class TestEmbeddingPipeline:
-    """测试端到端的嵌入流程"""
-
-    def test_semantic_embedding_pipeline(self, neo4j_store: Neo4jGraphStore, vector_store: ChromaVectorStore):
-        """测试 'semantic' 策略的完整流程，使用夹具文件"""
-        # 0. 清理旧数据
-        neo4j_store.clear_database()
-        collection_name = "test_semantic_embeddings_from_fixture"
-        vector_store.delete_collection(collection_name)
-
-        # 1. 设置: 使用 code-analyzer 解析夹具文件以填充 Neo4j
-        analyze_command = [
-            "code-analyzer",
-            "analyze",
-            "--file", FIXTURE_FILE
-        ]
-        analyze_result = subprocess.run(analyze_command, capture_output=True, text=True, shell=True, executable="/bin/bash")
-        print("--- Analyze STDOUT ---")
-        print(analyze_result.stdout)
-        print("--- Analyze STDERR ---")
-        print(analyze_result.stderr)
-        assert analyze_result.returncode == 0, "code-analyzer 执行失败"
+    @classmethod
+    def setUpClass(cls):
+        """测试类初始化"""
+        # 设置测试环境
+        cls.test_dir = tempfile.mkdtemp()
+        cls.test_data_dir = os.path.join(cls.test_dir, "data")
+        cls.test_chroma_dir = os.path.join(cls.test_dir, "chroma")
+        os.makedirs(cls.test_data_dir, exist_ok=True)
+        os.makedirs(cls.test_chroma_dir, exist_ok=True)
         
-        # 2. 执行: 运行嵌入命令
-        embed_command = [
-            "code-embed",
-            "--strategy", "semantic",
-            "--collection", collection_name
-        ]
+        # 创建测试代码文件
+        cls.test_code_dir = os.path.join(cls.test_dir, "code")
+        os.makedirs(cls.test_code_dir, exist_ok=True)
         
-        embed_result = subprocess.run(embed_command, capture_output=True, text=True, shell=True, executable="/bin/bash")
-        print("--- Embed STDOUT ---")
-        print(embed_result.stdout)
-        print("--- Embed STDERR ---")
-        print(embed_result.stderr)
-        assert embed_result.returncode == 0, "嵌入命令执行失败"
-        assert "嵌入任务成功完成" in embed_result.stdout
+        # 创建测试代码文件1
+        cls.test_code_file1 = os.path.join(cls.test_code_dir, "test_code1.c")
+        with open(cls.test_code_file1, 'w') as f:
+            f.write('void test_func_one() {\n  printf("Hello");\n}')
+            
+        # 创建测试代码文件2
+        cls.test_code_file2 = os.path.join(cls.test_code_dir, "test_code2.c")
+        with open(cls.test_code_file2, 'w') as f:
+            f.write('int test_func_two(int x) {\n  return x * 2;\n}')
+        
+        # 创建项目管理器
+        cls.config = {"project_data_dir": cls.test_data_dir}
+        cls.project_manager = ProjectManager(cls.config)
+        
+        # 创建两个测试项目
+        cls.project_id_1 = cls.project_manager.create_project("/tmp/project1", "Project 1")
+        cls.project_id_2 = cls.project_manager.create_project("/tmp/project2", "Project 2")
+        
+        # 创建两个项目的Chroma存储
+        cls.vector_store_1 = ChromaVectorStore(
+            persist_directory=cls.test_chroma_dir,
+            project_id=cls.project_id_1
+        )
+        
+        cls.vector_store_2 = ChromaVectorStore(
+            persist_directory=cls.test_chroma_dir,
+            project_id=cls.project_id_2
+        )
+        
+        # 创建代码分块器
+        cls.chunker = CodeChunker()
+        
+        # 创建嵌入引擎
+        cls.embedding_engine = JinaEmbeddingEngine()
+        cls.embedding_engine.load_model("jinaai/jina-embeddings-v2-base-code")
+        
+        # 创建代码嵌入器
+        cls.embedder_1 = CodeEmbedder(
+            vector_store=cls.vector_store_1,
+            embedding_engine=cls.embedding_engine
+        )
+        cls.embedder_2 = CodeEmbedder(
+            vector_store=cls.vector_store_2,
+            embedding_engine=cls.embedding_engine
+        )
+        
+    @classmethod
+    def tearDownClass(cls):
+        """测试类清理"""
+        # 清理临时目录
+        shutil.rmtree(cls.test_dir)
+        
+    def test_embedding_isolation(self):
+        """测试嵌入隔离功能"""
+        # 分块代码
+        chunks_1 = self.chunker.chunk_file_by_size(self.test_code_file1)
+        chunks_2 = self.chunker.chunk_file_by_size(self.test_code_file2)
+        
+        # 为项目1嵌入代码块
+        collection_name_1 = f"{self.project_id_1}_code_chunks"
+        self.vector_store_1.create_collection(collection_name_1)
+        
+        # 使用嵌入引擎编码文本
+        texts_1 = [chunk.content for chunk in chunks_1]
+        embeddings_1 = self.embedding_engine.encode_batch(texts_1)
+        metadatas_1 = [chunk.metadata for chunk in chunks_1]
+        
+        # 添加到向量存储
+        self.vector_store_1.add_embeddings(texts_1, embeddings_1, metadatas_1, collection_name_1)
+        
+        # 为项目2嵌入代码块
+        collection_name_2 = f"{self.project_id_2}_code_chunks"
+        self.vector_store_2.create_collection(collection_name_2)
+        
+        # 使用嵌入引擎编码文本
+        texts_2 = [chunk.content for chunk in chunks_2]
+        embeddings_2 = self.embedding_engine.encode_batch(texts_2)
+        metadatas_2 = [chunk.metadata for chunk in chunks_2]
+        
+        # 添加到向量存储
+        self.vector_store_2.add_embeddings(texts_2, embeddings_2, metadatas_2, collection_name_2)
+        
+        # 验证项目1的集合中的代码块
+        collections_1 = self.vector_store_1.list_collections()
+        self.assertIn(collection_name_1, collections_1)
+        
+        # 验证项目2的集合中的代码块
+        collections_2 = self.vector_store_2.list_collections()
+        self.assertIn(collection_name_2, collections_2)
+        
+        # 验证项目1不能看到项目2的集合
+        self.assertNotIn(collection_name_2, collections_1)
+        
+        # 验证项目2不能看到项目1的集合
+        self.assertNotIn(collection_name_1, collections_2)
+        
+    def test_query_isolation(self):
+        """测试查询隔离功能"""
+        # 准备测试数据
+        texts_1 = ["This is a test function for project 1"]
+        embeddings_1 = self.embedding_engine.encode_batch(texts_1)
+        metadatas_1 = [{"source": "project_1"}]
+        
+        texts_2 = ["This is a test function for project 2"]
+        embeddings_2 = self.embedding_engine.encode_batch(texts_2)
+        metadatas_2 = [{"source": "project_2"}]
+        
+        # 在项目1的集合中添加嵌入
+        collection_name_1 = self.vector_store_1.get_collection_name("test_collection")
+        self.vector_store_1.create_collection(collection_name_1)
+        self.vector_store_1.add_embeddings(texts_1, embeddings_1, metadatas_1, collection_name_1)
+        
+        # 在项目2的集合中添加嵌入
+        collection_name_2 = self.vector_store_2.get_collection_name("test_collection")
+        self.vector_store_2.create_collection(collection_name_2)
+        self.vector_store_2.add_embeddings(texts_2, embeddings_2, metadatas_2, collection_name_2)
+        
+        # 使用项目1的嵌入引擎查询项目1的集合
+        query_text = "test function"
+        query_embedding = self.embedding_engine.encode_text(query_text)
+        
+        # 查询项目1的集合
+        results_1 = self.vector_store_1.query_embeddings(query_embedding, n_results=1, collection_name=collection_name_1)
+        self.assertEqual(len(results_1), 1)
+        self.assertEqual(results_1[0]["document"], texts_1[0])
+        self.assertEqual(results_1[0]["metadata"]["source"], "project_1")
+        
+        # 查询项目2的集合
+        results_2 = self.vector_store_2.query_embeddings(query_embedding, n_results=1, collection_name=collection_name_2)
+        self.assertEqual(len(results_2), 1)
+        self.assertEqual(results_2[0]["document"], texts_2[0])
+        self.assertEqual(results_2[0]["metadata"]["source"], "project_2")
+        
+    def test_cross_project_query(self):
+        """测试跨项目查询隔离"""
+        # 准备测试数据
+        texts_1 = ["Unique content for project 1 only"]
+        embeddings_1 = self.embedding_engine.encode_batch(texts_1)
+        metadatas_1 = [{"source": "project_1_unique"}]
+        
+        texts_2 = ["Unique content for project 2 only"]
+        embeddings_2 = self.embedding_engine.encode_batch(texts_2)
+        metadatas_2 = [{"source": "project_2_unique"}]
+        
+        # 在项目1的集合中添加嵌入
+        collection_name_1 = self.vector_store_1.get_collection_name("unique_collection")
+        self.vector_store_1.create_collection(collection_name_1)
+        self.vector_store_1.add_embeddings(texts_1, embeddings_1, metadatas_1, collection_name_1)
+        
+        # 在项目2的集合中添加嵌入
+        collection_name_2 = self.vector_store_2.get_collection_name("unique_collection")
+        self.vector_store_2.create_collection(collection_name_2)
+        self.vector_store_2.add_embeddings(texts_2, embeddings_2, metadatas_2, collection_name_2)
+        
+        # 使用项目1的嵌入引擎查询项目1的集合
+        query_text = "unique content"
+        query_embedding = self.embedding_engine.encode_text(query_text)
+        
+        # 在项目1中查询项目2的集合名称（应该查不到）
+        with self.assertRaises(Exception):
+            self.vector_store_1.query_embeddings(query_embedding, n_results=1, collection_name=collection_name_2)
+            
+        # 在项目2中查询项目1的集合名称（应该查不到）
+        with self.assertRaises(Exception):
+            self.vector_store_2.query_embeddings(query_embedding, n_results=1, collection_name=collection_name_1)
 
-        # 3. 验证: 检查 ChromaDB 中的结果
-        time.sleep(1) # 等待持久化
-        
-        collection = vector_store.get_collection(collection_name)
-        assert collection is not None
-        
-        count = collection.count()
-        assert count == 2, f"集合应包含2个嵌入，但实际为 {count}"
-        
-        embeddings = collection.get(include=["metadatas"])
-        metadatas = embeddings['metadatas']
-        
-        func_names = {meta.get('function_name') for meta in metadatas}
-        assert "test_func_one" in func_names
-        assert "test_func_two" in func_names
 
-        for meta in metadatas:
-            assert meta['strategy'] == 'semantic'
-            assert meta['node_type'] == 'Function'
-            assert meta['source'] == os.path.abspath(FIXTURE_FILE)
-
-        # 清理
-        vector_store.delete_collection(collection_name) 
+if __name__ == "__main__":
+    unittest.main()

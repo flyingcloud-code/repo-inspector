@@ -7,17 +7,21 @@ Neo4j图数据库存储实现
 - 关系建立（CONTAINS关系）
 - 严格错误处理（无fallback）
 - 详细日志记录
+- 项目隔离支持
 """
 
 import logging
-from typing import Optional, List, Dict, Any
+import time
+import os
+import hashlib
+from typing import Optional, List, Dict, Any, Set, Tuple, Union
 from neo4j import GraphDatabase, Driver, Session
 from neo4j.exceptions import ServiceUnavailable, AuthError, Neo4jError, ConfigurationError, TransientError
+from neo4j.graph import Node
 from pathlib import Path
-import os
-import time
 from datetime import datetime
 from dotenv import load_dotenv
+import re
 
 from ..core.interfaces import IGraphStore
 from ..core.data_models import ParsedCode, Function, FileInfo, FunctionCall, FolderStructure, FileDependency, ModuleDependency
@@ -32,13 +36,23 @@ class Neo4jGraphStore(IGraphStore):
     """Neo4j图数据库存储实现
     
     严格模式：所有错误都会抛出异常，不提供fallback机制
+    支持项目隔离：通过project_id属性区分不同项目的数据
     """
 
-    def __init__(self):
-        """初始化Neo4j图存储"""
+    def __init__(self, uri: str = None, user: str = None, password: str = None, project_id: str = None):
+        """初始化Neo4j图存储
+        
+        Args:
+            uri: Neo4j数据库URI，如果为None则从环境变量获取
+            user: 用户名，如果为None则从环境变量获取
+            password: 密码，如果为None则从环境变量获取
+            project_id: 项目ID，用于隔离不同项目的数据
+        """
         self.driver: Optional[Driver] = None
-        self.uri = None
-        self.user = None
+        self.uri = uri
+        self.user = user
+        self.password = password
+        self.project_id = project_id
         self.connected = False
         
         # 根据配置设置日志级别
@@ -66,9 +80,15 @@ class Neo4jGraphStore(IGraphStore):
         logger.info("Neo4jGraphStore initialized in strict mode (no fallbacks)")
         if self.verbose:
             logger.debug("🔧 Verbose logging enabled for detailed operation tracking")
+        if self.project_id:
+            logger.info(f"Project isolation enabled with project_id: {self.project_id}")
 
         # 加载环境变量
         load_dotenv()
+        
+        # 如果提供了URI、用户名和密码，尝试连接
+        if uri and user and password:
+            self.connect(uri, user, password)
 
     def connect(self, uri: str = None, user: str = None, password: str = None) -> bool:
         """连接到Neo4j数据库
@@ -88,10 +108,10 @@ class Neo4jGraphStore(IGraphStore):
         logger.debug(f"Connection config: max_pool_size=50, timeout=60s")
         
         try:
-            # 如果参数为None，尝试从环境变量获取
-            uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
-            user = user or os.getenv("NEO4J_USER", "neo4j")
-            password = password or os.getenv("NEO4J_PASSWORD")
+            # 如果参数为None，尝试从环境变量获取或使用初始化时提供的值
+            uri = uri or self.uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
+            user = user or self.user or os.getenv("NEO4J_USER", "neo4j")
+            password = password or self.password or os.getenv("NEO4J_PASSWORD")
             
             if not password:
                 logger.error("未提供Neo4j密码，请设置NEO4J_PASSWORD环境变量")
@@ -111,6 +131,7 @@ class Neo4jGraphStore(IGraphStore):
             
             self.uri = uri
             self.user = user
+            self.password = password
             self.connected = True
             
             logger.info("✅ Successfully connected to Neo4j database")
@@ -135,177 +156,603 @@ class Neo4jGraphStore(IGraphStore):
             self.connected = False
             raise StorageError("connection_error", error_msg)
 
-    def store_parsed_code(self, parsed_code: ParsedCode) -> bool:
-        """存储解析后的代码数据
+    def store_parsed_code(self, parsed_code):
+        """存储解析后的代码信息
         
         Args:
-            parsed_code: 解析后的代码数据
+            parsed_code: 解析后的代码对象
             
         Returns:
             bool: 存储是否成功
             
         Raises:
-            StorageError: 存储失败时抛出异常（无fallback）
+            StorageError: 存储失败时抛出异常
         """
         if not self.driver:
             raise StorageError("storage_connection", "Not connected to Neo4j database")
         
-        file_path = parsed_code.file_info.path
-        func_count = len(parsed_code.functions)
-        
-        logger.info(f"📁 Storing parsed code for file: {file_path}")
-        logger.debug(f"File details: name={parsed_code.file_info.name}, size={parsed_code.file_info.size}")
-        logger.debug(f"Function count: {func_count}")
-        
-        if func_count > 0:
-            func_names = [f.name for f in parsed_code.functions]
-            logger.debug(f"Functions to store: {func_names}")
-        
         try:
-            with self.driver.session() as session:
-                logger.debug("Session created, starting transaction...")
+            # 获取文件路径和语言
+            file_path = parsed_code.file_info.path
+            language = parsed_code.file_info.file_type or "c"
+            
+            # 如果没有设置project_id，使用文件路径的哈希作为默认project_id
+            if not self.project_id:
+                self.project_id = "auto_" + hashlib.md5(file_path.encode()).hexdigest()[:8]
+                logger.info(f"未设置project_id，使用自动生成的ID: {self.project_id}")
+            
+            func_count = len(parsed_code.functions)
+            
+            logger.info(f"📁 Storing parsed code for file: {file_path}")
+            
+            # 创建文件节点
+            file_node_created = self.create_file_node(
+                file_path=file_path,
+                language=language
+            )
+            
+            if not file_node_created:
+                logger.warning(f"文件节点创建失败: {file_path}")
+                return False
+            
+            # 创建函数节点
+            for function in parsed_code.functions:
+                function_node_created = self.create_function_node(
+                    file_path=file_path,
+                    name=function.name,
+                    start_line=function.start_line,
+                    end_line=function.end_line,
+                    docstring=function.docstring,
+                    parameters=function.parameters,
+                    return_type=function.return_type
+                )
                 
-                # 使用事务函数确保数据一致性
-                result = session.execute_write(self._store_code_transaction, parsed_code)
+                if not function_node_created:
+                    logger.warning(f"函数节点创建失败: {function.name} in {file_path}")
                 
-                logger.info(f"✅ Successfully stored {func_count} functions from {file_path}")
-                logger.debug(f"Transaction result: {result}")
-                return True
+                # 创建函数调用关系
+                for call in function.calls:
+                    call_created = self.create_function_call(
+                        caller_file=file_path,
+                        caller_name=function.name,
+                        callee_name=call
+                    )
                     
-        except Neo4jError as e:
-            error_msg = f"Neo4j error during storage of {file_path}: {e}"
-            logger.error(f"❌ {error_msg}")
-            raise StorageError("transaction_failed", error_msg)
+                    if not call_created:
+                        logger.warning(f"函数调用关系创建失败: {function.name} -> {call}")
+            
+            logger.info(f"✅ Successfully stored {func_count} functions from {file_path}")
+            return True
             
         except Exception as e:
-            error_msg = f"Unexpected error during storage of {file_path}: {e}"
-            logger.error(f"❌ {error_msg}")
-            raise StorageError("storage_operation", error_msg)
+            logger.error(f"❌ Unexpected error during storage of {file_path}: {e}")
+            raise StorageError("storage_operation", f"Unexpected error during storage of {file_path}: {e}")
 
     def _store_code_transaction(self, tx, parsed_code: ParsedCode) -> bool:
-        """存储代码的事务函数
+        """在事务中存储代码数据
         
         Args:
             tx: Neo4j事务对象
             parsed_code: 解析后的代码数据
             
         Returns:
-            bool: 事务是否成功
-            
-        Raises:
-            Exception: 事务失败时抛出异常（无fallback）
+            bool: 存储是否成功
         """
-        file_info = parsed_code.file_info
-        file_path = file_info.path
+        file_path = parsed_code.file_info.path
+        file_name = os.path.basename(file_path)
+        language = parsed_code.file_info.file_type or "c"
         
-        logger.debug(f"🔄 Starting transaction for file: {file_path}")
+        # 如果没有设置project_id，使用文件路径的哈希作为默认project_id
+        if not self.project_id:
+            self.project_id = "auto_" + hashlib.md5(file_path.encode()).hexdigest()[:8]
+            logger.info(f"事务中未设置project_id，使用自动生成的ID: {self.project_id}")
         
-        try:
-            # 1. 创建或更新文件节点
-            logger.debug("Step 1: Creating/updating File node")
-            file_query = """
-            MERGE (f:File {path: $path})
-            SET f.name = $name,
-                f.size = $size,
-                f.last_modified = $last_modified,
-                f.updated = datetime()
-            RETURN f
+        # 创建文件节点
+        file_query = """
+        MERGE (f:File {path: $path, project_id: $project_id})
+        SET f.name = $name,
+            f.language = $language,
+            f.last_updated = datetime()
+        RETURN f
+        """
+        
+        file_params = {
+            "path": file_path,
+            "name": file_name,
+            "language": language,
+            "project_id": self.project_id
+        }
+        
+        tx.run(file_query, file_params)
+        
+        # 创建函数节点并建立与文件的关系
+        for function in parsed_code.functions:
+            function_query = """
+            MERGE (fn:Function {name: $name, file_path: $file_path, project_id: $project_id})
+            SET fn.start_line = $start_line,
+                fn.end_line = $end_line,
+                fn.docstring = $docstring,
+                fn.parameters = $parameters,
+                fn.return_type = $return_type,
+                fn.last_updated = datetime()
+            WITH fn
+            MATCH (f:File {path: $file_path, project_id: $project_id})
+            MERGE (f)-[:CONTAINS]->(fn)
+            RETURN fn
             """
             
-            file_params = {
-                'path': file_info.path,
-                'name': file_info.name,
-                'size': file_info.size,
-                'last_modified': file_info.last_modified.isoformat()
+            function_params = {
+                "name": function.name,
+                "file_path": file_path,
+                "start_line": function.start_line,
+                "end_line": function.end_line,
+                "docstring": function.docstring or "",
+                "parameters": function.parameters or [],
+                "return_type": function.return_type or "",
+                "project_id": self.project_id
             }
-            logger.debug(f"File query params: {file_params}")
             
-            file_result = tx.run(file_query, **file_params)
-            file_record = file_result.single()
-            logger.debug(f"File node created/updated: {file_record}")
+            tx.run(function_query, function_params)
             
-            # 2. 批量创建函数节点和CONTAINS关系
-            if parsed_code.functions:
-                logger.debug(f"Step 2: Creating {len(parsed_code.functions)} Function nodes and relationships")
-                
-                functions_data = []
-                for func in parsed_code.functions:
-                    func_data = {
-                        'name': func.name,
-                        'start_line': func.start_line,
-                        'end_line': func.end_line,
-                        'code': func.code,
-                        'file_path': file_info.path
-                    }
-                    functions_data.append(func_data)
-                    logger.debug(f"Prepared function data: {func.name} ({func.start_line}-{func.end_line})")
-                
-                # 批量创建函数节点和关系
-                batch_query = """
-                UNWIND $functions as func
-                MATCH (f:File {path: func.file_path})
-                MERGE (fn:Function {name: func.name, file_path: func.file_path})
-                SET fn.start_line = func.start_line,
-                    fn.end_line = func.end_line,
-                    fn.code = func.code,
-                    fn.updated = datetime()
-                MERGE (f)-[:CONTAINS]->(fn)
-                RETURN fn.name as created_function
+            # 创建函数调用关系
+            for call in function.calls:
+                call_query = """
+                MATCH (caller:Function {name: $caller_name, file_path: $file_path, project_id: $project_id})
+                MERGE (callee:Function {name: $callee_name, project_id: $project_id})
+                MERGE (caller)-[:CALLS]->(callee)
                 """
                 
-                logger.debug(f"Executing batch query with {len(functions_data)} functions")
-                batch_result = tx.run(batch_query, functions=functions_data)
+                call_params = {
+                    "caller_name": function.name,
+                    "file_path": file_path,
+                    "callee_name": call,
+                    "project_id": self.project_id
+                }
                 
-                created_functions = [record["created_function"] for record in batch_result]
-                logger.debug(f"Created functions: {created_functions}")
-            else:
-                logger.debug("No functions to create for this file")
+                tx.run(call_query, call_params)
+        
+        return True
+
+    def create_file_node(self, file_path: str, language: str) -> bool:
+        """创建文件节点
+        
+        Args:
+            file_path: 文件路径
+            language: 文件语言
             
-            logger.debug(f"✅ Transaction completed successfully for file: {file_path}")
+        Returns:
+            bool: 创建是否成功
             
-            # 3. 存储函数调用关系 (Story 2.1.3)
-            if parsed_code.call_relationships:
-                logger.debug(f"Step 3: Creating {len(parsed_code.call_relationships)} CALLS relationships")
-                
-                calls_data = []
-                for call in parsed_code.call_relationships:
-                    call_data = {
-                        'caller': call.caller_name,
-                        'callee': call.callee_name,
-                        'call_type': call.call_type,
-                        'line_no': call.line_number,
-                        'context': call.context
+        Raises:
+            StorageError: 创建失败时抛出异常
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+            
+        try:
+            with self.driver.session() as session:
+                # 根据是否有项目ID选择不同的查询
+                if self.project_id:
+                    # 先检查是否已存在相同的文件节点
+                    check_query = """
+                    MATCH (f:File {path: $path, project_id: $project_id})
+                    RETURN f
+                    """
+                    check_params = {
+                        "path": file_path,
+                        "project_id": self.project_id
                     }
-                    calls_data.append(call_data)
-                    logger.debug(f"Prepared call relationship: {call.caller_name} -> {call.callee_name} ({call.call_type})")
+                    check_result = session.run(check_query, check_params)
+                    
+                    if check_result.single():
+                        logger.info(f"文件节点已存在: {file_path} (项目ID: {self.project_id})")
+                        return True
+                    
+                    # 创建文件节点
+                    query = """
+                    CREATE (f:File {
+                        path: $path, 
+                        name: $name,
+                        language: $language, 
+                        project_id: $project_id
+                    })
+                    RETURN f
+                    """
+                    params = {
+                        "path": file_path,
+                        "name": os.path.basename(file_path),
+                        "language": language,
+                        "project_id": self.project_id
+                    }
+                    logger.info(f"创建文件节点: {file_path} (项目ID: {self.project_id})")
+                else:
+                    # 向后兼容，不添加project_id属性
+                    query = """
+                    CREATE (f:File {
+                        path: $path, 
+                        name: $name,
+                        language: $language
+                    })
+                    RETURN f
+                    """
+                    params = {
+                        "path": file_path,
+                        "name": os.path.basename(file_path),
+                        "language": language
+                    }
+                    logger.info(f"创建文件节点: {file_path} (无项目隔离)")
                 
-                # 批量创建调用关系
-                calls_query = """
-                UNWIND $calls as call
-                MERGE (caller:Function {name: call.caller})
-                MERGE (callee:Function {name: call.callee})
-                MERGE (caller)-[rel:CALLS]->(callee)
-                SET rel.call_type = call.call_type,
-                    rel.line_no = call.line_no,
-                    rel.context = call.context,
-                    rel.updated = datetime()
-                RETURN caller.name as caller_name, callee.name as callee_name
-                """
+                logger.debug(f"执行查询: {query}")
+                logger.debug(f"查询参数: {params}")
                 
-                logger.debug(f"Executing calls query with {len(calls_data)} relationships")
-                calls_result = tx.run(calls_query, calls=calls_data)
+                result = session.run(query, params)
+                record = result.single()
                 
-                created_calls = [(record["caller_name"], record["callee_name"]) for record in calls_result]
-                logger.debug(f"Created call relationships: {created_calls}")
-            else:
-                logger.debug("No call relationships to create for this file")
-            
-            return True
-            
+                if record:
+                    logger.info(f"✅ 文件节点创建成功: {file_path}")
+                    return True
+                else:
+                    logger.warning(f"⚠️ 文件节点可能未创建: {file_path}")
+                    return False
         except Exception as e:
-            error_msg = f"Transaction failed for file {file_path}: {e}"
-            logger.error(f"❌ {error_msg}")
-            raise StorageError("transaction_execution", error_msg)
+            logger.error(f"创建文件节点失败: {e}")
+            # 如果是唯一约束冲突，且启用了项目隔离，尝试清理旧数据
+            if "ConstraintValidationFailed" in str(e) and self.project_id:
+                try:
+                    logger.warning(f"检测到约束冲突，尝试清理旧数据并重新创建节点")
+                    with self.driver.session() as session:
+                        # 删除没有project_id的同路径节点
+                        clean_query = """
+                        MATCH (f:File {path: $path})
+                        WHERE f.project_id IS NULL OR NOT EXISTS(f.project_id)
+                        DELETE f
+                        """
+                        session.run(clean_query, {"path": file_path})
+                        
+                        # 重新创建节点
+                        create_query = """
+                        CREATE (f:File {
+                            path: $path, 
+                            name: $name,
+                            language: $language, 
+                            project_id: $project_id
+                        })
+                        RETURN f
+                        """
+                        create_params = {
+                            "path": file_path,
+                            "name": os.path.basename(file_path),
+                            "language": language,
+                            "project_id": self.project_id
+                        }
+                        result = session.run(create_query, create_params)
+                        if result.single():
+                            logger.info(f"✅ 清理后成功创建文件节点: {file_path}")
+                            return True
+                except Exception as recovery_error:
+                    logger.error(f"尝试恢复失败: {recovery_error}")
+            
+            raise StorageError("create_file_node", str(e))
+
+    def create_function_node(self, file_path: str, name: str, start_line: int, end_line: int, 
+                            docstring: str = "", parameters: List[str] = None, 
+                            return_type: str = "") -> bool:
+        """创建函数节点
+        
+        Args:
+            file_path: 文件路径
+            name: 函数名
+            start_line: 开始行号
+            end_line: 结束行号
+            docstring: 函数文档字符串
+            parameters: 参数列表
+            return_type: 返回类型
+            
+        Returns:
+            bool: 创建是否成功
+            
+        Raises:
+            StorageError: 创建失败时抛出异常
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+            
+        try:
+            with self.driver.session() as session:
+                # 首先检查文件节点是否存在
+                file_check_query = """
+                MATCH (f:File {path: $path})
+                """
+                
+                # 如果启用了项目隔离，添加项目ID条件
+                if self.project_id:
+                    file_check_query += " WHERE f.project_id = $project_id"
+                    file_check_params = {
+                        "path": file_path,
+                        "project_id": self.project_id
+                    }
+                    logger.debug(f"检查文件节点是否存在 (项目ID: {self.project_id}): {file_path}")
+                else:
+                    file_check_params = {"path": file_path}
+                    logger.debug(f"检查文件节点是否存在 (无项目隔离): {file_path}")
+                
+                file_check_query += " RETURN f"
+                file_check_result = session.run(file_check_query, file_check_params)
+                file_record = file_check_result.single()
+                
+                if not file_record:
+                    logger.warning(f"文件节点不存在，将先创建文件节点: {file_path}")
+                    self.create_file_node(file_path, "c")  # 假设是C语言文件
+                
+                # 创建函数节点
+                if parameters is None:
+                    parameters = []
+                    
+                # 根据是否有项目ID选择不同的查询
+                if self.project_id:
+                    logger.info(f"创建函数节点: {name} (项目ID: {self.project_id})")
+                    # 检查是否已存在相同的函数节点
+                    check_query = """
+                    MATCH (f:Function {name: $name, file_path: $file_path, project_id: $project_id})
+                    RETURN f
+                    """
+                    check_params = {
+                        "name": name,
+                        "file_path": file_path,
+                        "project_id": self.project_id
+                    }
+                    check_result = session.run(check_query, check_params)
+                    
+                    if check_result.single():
+                        logger.info(f"函数节点已存在: {name} (项目ID: {self.project_id})")
+                        return True
+                    
+                    # 创建函数节点并与文件节点建立关系
+                    query = """
+                    MATCH (file:File {path: $file_path, project_id: $project_id})
+                    CREATE (func:Function {
+                        name: $name,
+                        file_path: $file_path,
+                        start_line: $start_line,
+                        end_line: $end_line,
+                        docstring: $docstring,
+                        parameters: $parameters,
+                        return_type: $return_type,
+                        project_id: $project_id
+                    })
+                    CREATE (file)-[:CONTAINS {project_id: $project_id}]->(func)
+                    RETURN func
+                    """
+                    params = {
+                        "name": name,
+                        "file_path": file_path,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "docstring": docstring,
+                        "parameters": parameters,
+                        "return_type": return_type,
+                        "project_id": self.project_id
+                    }
+                else:
+                    # 向后兼容，不添加project_id属性
+                    logger.info(f"创建函数节点: {name} (无项目隔离)")
+                    query = """
+                    MATCH (file:File {path: $file_path})
+                    CREATE (func:Function {
+                        name: $name,
+                        file_path: $file_path,
+                        start_line: $start_line,
+                        end_line: $end_line,
+                        docstring: $docstring,
+                        parameters: $parameters,
+                        return_type: $return_type
+                    })
+                    CREATE (file)-[:CONTAINS]->(func)
+                    RETURN func
+                    """
+                    params = {
+                        "name": name,
+                        "file_path": file_path,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "docstring": docstring,
+                        "parameters": parameters,
+                        "return_type": return_type
+                    }
+                
+                logger.debug(f"执行查询: {query}")
+                logger.debug(f"查询参数: {params}")
+                
+                result = session.run(query, params)
+                record = result.single()
+                
+                if record:
+                    logger.info(f"✅ 函数节点创建成功: {name}")
+                    return True
+                else:
+                    logger.warning(f"⚠️ 函数节点可能未创建: {name}")
+                    return False
+        except Exception as e:
+            logger.error(f"创建函数节点失败: {e}")
+            # 如果是唯一约束冲突，且启用了项目隔离，尝试清理旧数据
+            if "ConstraintValidationFailed" in str(e) and self.project_id:
+                try:
+                    logger.warning(f"检测到约束冲突，尝试清理旧数据并重新创建节点")
+                    with self.driver.session() as session:
+                        # 删除没有project_id的同名函数节点
+                        clean_query = """
+                        MATCH (f:Function {name: $name, file_path: $file_path})
+                        WHERE f.project_id IS NULL OR NOT EXISTS(f.project_id)
+                        DETACH DELETE f
+                        """
+                        session.run(clean_query, {"name": name, "file_path": file_path})
+                        
+                        # 重新创建节点
+                        create_query = """
+                        MATCH (file:File {path: $file_path, project_id: $project_id})
+                        CREATE (func:Function {
+                            name: $name,
+                            file_path: $file_path,
+                            start_line: $start_line,
+                            end_line: $end_line,
+                            docstring: $docstring,
+                            parameters: $parameters,
+                            return_type: $return_type,
+                            project_id: $project_id
+                        })
+                        CREATE (file)-[:CONTAINS {project_id: $project_id}]->(func)
+                        RETURN func
+                        """
+                        create_params = {
+                            "name": name,
+                            "file_path": file_path,
+                            "start_line": start_line,
+                            "end_line": end_line,
+                            "docstring": docstring,
+                            "parameters": parameters,
+                            "return_type": return_type,
+                            "project_id": self.project_id
+                        }
+                        result = session.run(create_query, create_params)
+                        if result.single():
+                            logger.info(f"✅ 清理后成功创建函数节点: {name}")
+                            return True
+                except Exception as recovery_error:
+                    logger.error(f"尝试恢复失败: {recovery_error}")
+            
+            raise StorageError("create_function_node", str(e))
+
+    def create_calls_relationship(self, caller_function: str, called_function: str) -> bool:
+        """创建调用关系
+        
+        Args:
+            caller_function: 调用函数名
+            called_function: 被调用函数名
+            
+        Returns:
+            bool: 创建是否成功
+            
+        Raises:
+            StorageError: 创建失败时抛出异常
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+            
+        try:
+            with self.driver.session() as session:
+                # 根据是否有项目ID选择不同的查询
+                if self.project_id:
+                    query = """
+                    MATCH (caller:Function {name: $caller, project_id: $project_id})
+                    MATCH (called:Function {name: $called, project_id: $project_id})
+                    CREATE (caller)-[:CALLS {project_id: $project_id}]->(called)
+                    RETURN caller, called
+                    """
+                    params = {
+                        "caller": caller_function,
+                        "called": called_function,
+                        "project_id": self.project_id
+                    }
+                else:
+                    # 向后兼容，不添加project_id属性
+                    query = """
+                    MATCH (caller:Function {name: $caller})
+                    MATCH (called:Function {name: $called})
+                    CREATE (caller)-[:CALLS]->(called)
+                    RETURN caller, called
+                    """
+                    params = {
+                        "caller": caller_function,
+                        "called": called_function
+                    }
+                session.run(query, params)
+                return True
+        except Exception as e:
+            logger.error(f"Failed to create calls relationship: {e}")
+            raise StorageError("create_calls_relationship", str(e))
+
+    def get_functions(self) -> List[Dict[str, Any]]:
+        """获取所有函数
+        
+        Returns:
+            List[Dict[str, Any]]: 函数列表
+            
+        Raises:
+            StorageError: 获取失败时抛出异常
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+            
+        try:
+            with self.driver.session() as session:
+                # 根据是否有项目ID选择不同的查询
+                if self.project_id:
+                    logger.info(f"查询特定项目的函数: project_id={self.project_id}")
+                    query = """
+                    MATCH (f:Function)
+                    WHERE f.project_id = $project_id
+                    RETURN f.name as name, f.file_path as file_path, 
+                           f.start_line as start_line, f.end_line as end_line,
+                           f.project_id as project_id
+                    """
+                    params = {"project_id": self.project_id}
+                else:
+                    logger.info("查询所有函数 (无项目隔离)")
+                    query = """
+                    MATCH (f:Function)
+                    RETURN f.name as name, f.file_path as file_path, 
+                           f.start_line as start_line, f.end_line as end_line,
+                           f.project_id as project_id
+                    """
+                    params = {}
+                
+                logger.debug(f"执行查询: {query}")
+                logger.debug(f"查询参数: {params}")
+                
+                result = session.run(query, params)
+                functions = [dict(record) for record in result]
+                
+                logger.info(f"查询到 {len(functions)} 个函数")
+                return functions
+                
+        except Exception as e:
+            logger.error(f"获取函数失败: {e}")
+            raise StorageError("get_functions", str(e))
+
+    def get_call_graph(self) -> List[Dict[str, Any]]:
+        """获取调用图
+        
+        Returns:
+            List[Dict[str, Any]]: 调用关系列表
+            
+        Raises:
+            StorageError: 获取失败时抛出异常
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+            
+        try:
+            with self.driver.session() as session:
+                # 根据是否有项目ID选择不同的查询
+                if self.project_id:
+                    query = """
+                    MATCH (caller:Function)-[r:CALLS]->(called:Function)
+                    WHERE r.project_id = $project_id
+                    RETURN caller.name as caller, called.name as called
+                    """
+                    params = {"project_id": self.project_id}
+                else:
+                    # 向后兼容，不过滤project_id
+                    query = """
+                    MATCH (caller:Function)-[r:CALLS]->(called:Function)
+                    RETURN caller.name as caller, called.name as called
+                    """
+                    params = {}
+                result = session.run(query, params)
+                return [dict(record) for record in result]
+        except Exception as e:
+            logger.error(f"Failed to get call graph: {e}")
+            raise StorageError("get_call_graph", str(e))
 
     def clear_database(self) -> bool:
         """清空数据库中的所有数据
@@ -1083,19 +1530,51 @@ class Neo4jGraphStore(IGraphStore):
         
         try:
             with self.driver.session() as session:
+                # 先尝试删除旧的文件路径约束
+                try:
+                    session.run("DROP CONSTRAINT file_path_unique IF EXISTS")
+                    logger.info("已删除旧的文件路径约束")
+                except Exception as e:
+                    logger.warning(f"删除旧约束时出错: {e}")
+                    
+                # 尝试删除旧的函数节点约束
+                try:
+                    session.run("DROP CONSTRAINT function_name_file_unique IF EXISTS")
+                    logger.info("已删除旧的函数节点约束")
+                except Exception as e:
+                    logger.warning(f"删除旧约束时出错: {e}")
+                
                 # 创建函数节点的唯一约束
-                session.run("""
-                    CREATE CONSTRAINT function_name_file_unique IF NOT EXISTS
-                    FOR (f:Function)
-                    REQUIRE (f.name, f.file_path) IS UNIQUE
-                """)
+                if self.project_id:
+                    # 项目隔离模式：函数名称和文件路径在项目内唯一
+                    session.run("""
+                        CREATE CONSTRAINT function_name_file_project_unique IF NOT EXISTS
+                        FOR (f:Function)
+                        REQUIRE (f.name, f.file_path, f.project_id) IS UNIQUE
+                    """)
+                else:
+                    # 向后兼容：函数名称和文件路径全局唯一
+                    session.run("""
+                        CREATE CONSTRAINT function_name_file_unique IF NOT EXISTS
+                        FOR (f:Function)
+                        REQUIRE (f.name, f.file_path) IS UNIQUE
+                    """)
                 
                 # 创建文件节点的唯一约束
-                session.run("""
-                    CREATE CONSTRAINT file_path_unique IF NOT EXISTS
-                    FOR (f:File)
-                    REQUIRE f.path IS UNIQUE
-                """)
+                if self.project_id:
+                    # 项目隔离模式：文件路径在项目内唯一
+                    session.run("""
+                        CREATE CONSTRAINT file_path_project_unique IF NOT EXISTS
+                        FOR (f:File)
+                        REQUIRE (f.path, f.project_id) IS UNIQUE
+                    """)
+                else:
+                    # 向后兼容：全局唯一文件路径
+                    session.run("""
+                        CREATE CONSTRAINT file_path_unique IF NOT EXISTS
+                        FOR (f:File)
+                        REQUIRE f.path IS UNIQUE
+                    """)
                 
                 # 创建模块节点的唯一约束
                 session.run("""
@@ -1178,3 +1657,70 @@ class Neo4jGraphStore(IGraphStore):
         logger.debug("Executing query to fetch all code units")
         result = tx.run(query)
         return result 
+
+    def run_query(self, query: str, params: Dict = None) -> List[Dict]:
+        """执行自定义查询
+        
+        Args:
+            query: Cypher查询语句
+            params: 查询参数
+            
+        Returns:
+            List[Dict]: 查询结果列表
+            
+        Raises:
+            StorageError: 查询失败时抛出异常
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+            
+        try:
+            with self.driver.session() as session:
+                # 如果启用了项目隔离，但查询中没有明确指定项目ID，则添加项目ID过滤条件
+                if self.project_id and "project_id" not in query:
+                    # 检查是否是简单的MATCH查询，可以安全地添加项目ID过滤
+                    if query.strip().upper().startswith("MATCH") and "WHERE" not in query:
+                        parts = query.split("RETURN", 1)
+                        if len(parts) == 2:
+                            match_part = parts[0]
+                            # 使用正则一次性捕获所有节点变量 (形如 MATCH (f:Function) 或 MATCH (n))
+                            node_vars = re.findall(r"\(\s*([A-Za-z0-9_]+)\s*:[^)]*\)", match_part)
+                            # 如果未能通过带label的形式捕获，再捕获无label的
+                            if not node_vars:
+                                node_vars = re.findall(r"\(\s*([A-Za-z0-9_]+)\s*\)", match_part)
+                            if node_vars:
+                                where_clauses = [f"({var}.project_id = $project_id OR {var}.project_id IS NULL)" for var in node_vars]
+                                where_part = " AND ".join(where_clauses)
+                                modified_query = f"{parts[0]} WHERE {where_part} RETURN {parts[1]}"
+                                logger.info(f"[run_query] 自动添加项目ID过滤: {modified_query.strip()}")
+                                query = modified_query
+                                if params is None:
+                                    params = {}
+                                params.setdefault("project_id", self.project_id)
+                
+                logger.debug(f"执行查询: {query}")
+                logger.debug(f"查询参数: {params}")
+                
+                result = session.run(query, params)
+                records = []
+                
+                for record in result:
+                    skip_record = False
+                    record_dict = {}
+                    for key, value in record.items():
+                        if isinstance(value, Node):
+                            node_dict = dict(value)
+                            # 若节点含有project_id且与当前store不符，则过滤该记录
+                            if "project_id" in node_dict and node_dict["project_id"] != self.project_id:
+                                skip_record = True
+                                break
+                            record_dict[key] = node_dict
+                        else:
+                            record_dict[key] = value
+                    if not skip_record:
+                        records.append(record_dict)
+                
+                return records
+        except Exception as e:
+            logger.error(f"执行查询失败: {e}")
+            raise StorageError("run_query", str(e)) 

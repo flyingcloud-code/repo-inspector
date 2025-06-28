@@ -15,6 +15,7 @@ import concurrent.futures
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import logging
+import hashlib
 
 from tqdm import tqdm
 
@@ -24,6 +25,9 @@ from ..storage.neo4j_store import Neo4jGraphStore
 from ..llm.service_factory import ServiceFactory
 from ..core.exceptions import StorageError, ParseError, ConfigurationError
 from ..utils.logger import get_logger
+from ..llm.code_qa_service import CodeQAService
+from ..llm.code_embedder import CodeEmbedder
+from ..llm.code_chunker import CodeChunker
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +37,7 @@ class CodeAnalyzer:
     
     def __init__(self, project_path: Path, output_dir: Optional[Path] = None,
                include_pattern: str = "*.c,*.h", exclude_pattern: str = None,
-               threads: int = 4):
+               threads: int = 4, project_id: Optional[str] = None):
         """初始化代码分析器
         
         Args:
@@ -42,33 +46,70 @@ class CodeAnalyzer:
             include_pattern: 包含的文件模式，逗号分隔
             exclude_pattern: 排除的文件模式，逗号分隔
             threads: 并行处理线程数
+            project_id: 项目ID，用于项目隔离
         """
         self.project_path = project_path
         self.output_dir = output_dir or project_path / ".analysis"
         self.include_pattern = include_pattern.split(",") if include_pattern else ["*.c", "*.h"]
         self.exclude_pattern = exclude_pattern.split(",") if exclude_pattern else []
         self.threads = threads
+        
+        # 生成项目ID（如果未提供）
+        if project_id is None:
+            project_id = self._generate_project_id(project_path)
+        self.project_id = project_id
+        
+        # 初始化解析器
         self.parser = CParser()
-        self.graph_store = Neo4jGraphStore()
+        
+        # 初始化存储（带项目隔离）
+        config = ConfigManager().get_config()
+        self.graph_store = Neo4jGraphStore(project_id=self.project_id)
+        self.graph_store.connect(
+            config.database.neo4j_uri,
+            config.database.neo4j_user,
+            config.database.neo4j_password
+        )
+        
+        # 初始化嵌入相关组件
+        self.service_factory = ServiceFactory()
+        self.embedding_engine = self.service_factory.get_embedding_engine()
+        self.vector_store = self.service_factory.create_vector_store(project_id=self.project_id)
+        self.code_chunker = CodeChunker()
+        self.code_embedder = CodeEmbedder(
+            embedding_engine=self.embedding_engine,
+            vector_store=self.vector_store,
+            batch_size=50
+        )
+        
+        # 初始化其他服务
         self.dependency_service = ServiceFactory.get_dependency_service()
         self.call_graph_service = ServiceFactory.get_call_graph_service()
         
         # 确保输出目录存在
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        # 连接数据库
-        config = ConfigManager().get_config()
-        self.graph_store.connect(
-            config.database.neo4j_uri,
-            config.database.neo4j_user,
-            config.database.neo4j_password
-        )
+        logger.info(f"代码分析器初始化完成，项目ID: {self.project_id}")
     
-    def analyze(self, incremental: bool = False) -> Dict[str, Any]:
+    def _generate_project_id(self, project_path: Path) -> str:
+        """生成项目ID
+        
+        Args:
+            project_path: 项目路径
+            
+        Returns:
+            str: 项目ID
+        """
+        abs_path = str(project_path.resolve())
+        hash_value = hashlib.md5(abs_path.encode()).hexdigest()[:8]
+        return f"auto_{hash_value}"
+    
+    def analyze(self, incremental: bool = False, generate_embeddings: bool = True) -> Dict[str, Any]:
         """分析项目
         
         Args:
             incremental: 是否进行增量分析
+            generate_embeddings: 是否生成向量嵌入
             
         Returns:
             Dict[str, Any]: 分析结果统计
@@ -80,6 +121,7 @@ class CodeAnalyzer:
         total_files = len(files)
         
         print(f"开始分析项目: {self.project_path}")
+        print(f"项目ID: {self.project_id}")
         print(f"目标文件数: {total_files}")
         
         # 使用线程池并行处理
@@ -104,6 +146,12 @@ class CodeAnalyzer:
         print("分析文件间依赖关系...")
         project_deps = self.dependency_service.analyze_project(self.project_path)
         
+        # 生成向量嵌入
+        embedding_stats = {}
+        if generate_embeddings:
+            print("生成向量嵌入...")
+            embedding_stats = self._generate_embeddings(results)
+        
         # 保存分析结果
         self._save_analysis_results(results, project_deps)
         
@@ -112,17 +160,21 @@ class CodeAnalyzer:
         
         # 返回统计信息
         stats = {
+            "project_id": self.project_id,
             "total_files": total_files,
             "processed_files": len(results),
             "total_functions": sum(len(r.functions) for r in results if r),
             "file_dependencies": len(project_deps.file_dependencies),
             "module_dependencies": len(project_deps.module_dependencies),
             "circular_dependencies": len(project_deps.circular_dependencies),
-            "elapsed_time": elapsed
+            "elapsed_time": elapsed,
+            "embeddings": embedding_stats
         }
         
         print(f"分析完成，耗时: {elapsed:.2f}秒")
         print(f"共处理 {stats['processed_files']} 个文件，发现 {stats['total_functions']} 个函数")
+        if generate_embeddings and embedding_stats:
+            print(f"生成嵌入向量: {embedding_stats.get('total_chunks', 0)} 个代码块")
         
         return stats
     
@@ -276,6 +328,92 @@ class CodeAnalyzer:
                     f.write(f"{i+1}. {' -> '.join(cycle)}\n")
         
         print(f"分析结果已保存到: {self.output_dir}")
+    
+    def _generate_embeddings(self, results: List[Any]) -> Dict[str, Any]:
+        """生成向量嵌入
+        
+        Args:
+            results: 解析结果列表
+            
+        Returns:
+            Dict[str, Any]: 嵌入统计信息
+        """
+        try:
+            # 确保嵌入引擎已加载模型
+            if not self.embedding_engine.model:
+                print("加载嵌入模型...")
+                self.embedding_engine.load_model("jinaai/jina-embeddings-v2-base-code")
+            
+            # 收集所有已处理的文件进行分块
+            all_chunks = []
+            total_functions = 0
+            processed_files = set()
+            
+            for result in results:
+                if not result or not hasattr(result, 'functions'):
+                    continue
+                    
+                # 获取文件路径 - ParsedCode对象有file_info属性
+                file_path = None
+                if hasattr(result, 'file_info') and result.file_info and hasattr(result.file_info, 'path'):
+                    file_path = str(result.file_info.path)
+                elif hasattr(result, 'functions') and result.functions and result.functions[0].file_path:
+                    # 备用方案：从第一个函数获取文件路径
+                    file_path = result.functions[0].file_path
+                
+                if file_path and file_path not in processed_files:
+                    processed_files.add(file_path)
+                    
+                    # 使用tree-sitter对整个文件进行语义分块
+                    try:
+                        file_chunks = self.code_chunker.chunk_file_by_tree_sitter(file_path)
+                        all_chunks.extend(file_chunks)
+                        print(f"文件 {file_path} 生成了 {len(file_chunks)} 个代码块")
+                    except Exception as e:
+                        logger.warning(f"文件 {file_path} tree-sitter分块失败，回退到按大小分块: {e}")
+                        # 回退到按大小分块
+                        file_chunks = self.code_chunker.chunk_file_by_size(file_path)
+                        all_chunks.extend(file_chunks)
+                        print(f"文件 {file_path} 按大小分块生成了 {len(file_chunks)} 个代码块")
+                
+                # 统计函数数量
+                if hasattr(result, 'functions'):
+                    total_functions += len(result.functions)
+            
+            print(f"从 {len(processed_files)} 个文件，{total_functions} 个函数生成了 {len(all_chunks)} 个代码块")
+            
+            if not all_chunks:
+                print("没有代码块需要嵌入")
+                return {"total_chunks": 0, "total_functions": total_functions, "total_files": len(processed_files)}
+            
+            # 使用项目特定的集合名称
+            collection_name = "code_embeddings"
+            
+            # 批量生成嵌入
+            success = self.code_embedder.embed_code_chunks(all_chunks, collection_name)
+            
+            if success:
+                print(f"✅ 成功生成 {len(all_chunks)} 个嵌入向量")
+                return {
+                    "total_chunks": len(all_chunks),
+                    "total_functions": total_functions,
+                    "total_files": len(processed_files),
+                    "collection_name": self.vector_store.get_collection_name(collection_name),
+                    "success": True
+                }
+            else:
+                print("❌ 嵌入生成失败")
+                return {
+                    "total_chunks": 0,
+                    "total_functions": total_functions,
+                    "total_files": len(processed_files),
+                    "success": False
+                }
+                
+        except Exception as e:
+            logger.error(f"生成嵌入时出错: {e}", exc_info=True)
+            print(f"❌ 嵌入生成出错: {e}")
+            return {"error": str(e), "success": False}
 
 
 class InteractiveQuerySession:
@@ -295,7 +433,13 @@ class InteractiveQuerySession:
         self.history_file = history_file
         self.focus_function = focus_function
         self.focus_file = focus_file
-        self.qa_service = ServiceFactory.get_code_qa_service()
+        
+        # 根据项目路径生成项目ID
+        abs_path = str(project_path.resolve())
+        self.project_id = "auto_" + hashlib.md5(abs_path.encode()).hexdigest()[:8]
+        
+        # 创建带项目ID的问答服务
+        self.qa_service = CodeQAService(project_id=self.project_id)
         self.history = []
         
         # 加载历史记录
@@ -578,7 +722,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 threads=args.threads
             )
             
-            analyzer.analyze(incremental=args.incremental)
+            analyzer.analyze(incremental=args.incremental, generate_embeddings=True)
             return 0
         
         elif args.command == "query":

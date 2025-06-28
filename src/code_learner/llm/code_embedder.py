@@ -111,7 +111,13 @@ class CodeEmbedder:
                 # 存储嵌入
                 if embeddings_to_store:
                     logger.info(f"存储批次 {batch_idx+1}/{num_batches} 的 {len(embeddings_to_store)} 个嵌入")
-                    success = self.vector_store.add_embeddings(embeddings_to_store, collection_name)
+                    
+                    # 格式化数据为ChromaVectorStore期望的格式
+                    texts = [emb.text for emb in embeddings_to_store]
+                    vectors = [emb.embedding for emb in embeddings_to_store]
+                    metadatas = [emb.metadata for emb in embeddings_to_store]
+                    
+                    success = self.vector_store.add_embeddings(texts, vectors, metadatas, collection_name)
                     if not success:
                         logger.error(f"批次 {batch_idx+1}/{num_batches} 嵌入存储失败")
                         return False
@@ -269,7 +275,13 @@ class CodeEmbedder:
                 # 存储嵌入
                 if embeddings:
                     logger.info(f"存储批次 {batch_idx+1}/{num_batches} 的 {len(embeddings)} 个嵌入")
-                    success = self.vector_store.add_embeddings(embeddings)
+                    
+                    # 格式化数据为ChromaVectorStore期望的格式
+                    texts = [emb.text for emb in embeddings]
+                    vectors = [emb.embedding for emb in embeddings]
+                    metadatas = [emb.metadata for emb in embeddings]
+                    
+                    success = self.vector_store.add_embeddings(texts, vectors, metadatas)
                     if not success:
                         logger.error(f"批次{batch_idx+1}/{num_batches}嵌入存储失败")
                         return False

@@ -1,0 +1,7 @@
+# 项目依赖
+neo4j>=5.0.0
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+python-dotenv>=1.0.0
+click>=8.0.0
+httpx[socks]>=0.24.0  # 添加SOCKS代理支持 
