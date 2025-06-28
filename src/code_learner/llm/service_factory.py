@@ -76,9 +76,22 @@ class ServiceFactory:
         cache_key = f"graph_store_{project_id}" if project_id else "graph_store"
         
         if cache_key not in cls._services:
+            # 获取配置
+            config = ConfigManager().get_config()
+            
+            # 创建Neo4j存储实例
             store = Neo4jGraphStore(project_id=project_id)
-            if not store.connect():
+            
+            # 使用配置中的连接参数进行连接
+            success = store.connect(
+                config.database.neo4j_uri,
+                config.database.neo4j_user,
+                config.database.neo4j_password
+            )
+            
+            if not success:
                 raise ConnectionError("无法连接到Neo4j数据库")
+            
             cls._services[cache_key] = store
         return cls._services[cache_key]
 

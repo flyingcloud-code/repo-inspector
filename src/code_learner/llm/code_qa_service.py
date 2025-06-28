@@ -1,21 +1,16 @@
 """
 代码问答服务
 
-整合向量嵌入、向量存储和聊天机器人
-提供统一的代码问答和摘要生成服务
-支持repo级别的智能代码分析
+提供智能的代码理解和问答功能，结合图数据库和向量数据库
 """
-import logging
-import os
-from typing import List, Dict, Any, Optional
 
-from .service_factory import ServiceFactory
-from .embedding_engine import JinaEmbeddingEngine
-from .vector_store import ChromaVectorStore
-from .chatbot import OpenRouterChatBot
-from ..core.data_models import Function, EmbeddingData, ChatResponse
-from ..core.exceptions import ServiceError, QueryError
+import logging
+import re
+from typing import List, Dict, Any, Optional
+from ..core.interfaces import IEmbeddingEngine, IVectorStore, IGraphStore, IChatBot
+from ..llm.service_factory import ServiceFactory
 from ..utils.logger import get_logger
+from .intent_analyzer import IntentAnalyzer
 
 logger = get_logger(__name__)
 
@@ -23,62 +18,43 @@ logger = get_logger(__name__)
 class CodeQAService:
     """代码问答服务
     
-    整合所有LLM服务，提供统一的代码分析和问答接口
-    支持repo级别的智能代码理解和交互
+    结合Neo4j图数据库和Chroma向量数据库，提供智能的代码问答功能
     """
     
-    def __init__(self, service_factory: Optional[ServiceFactory] = None, project_id: str = None):
+    def __init__(self, project_id: str = None):
         """初始化代码问答服务
         
         Args:
-            service_factory: 服务工厂
             project_id: 项目ID，用于项目隔离
         """
-        self.service_factory = service_factory or ServiceFactory()
         self.project_id = project_id
         
-        # 延迟初始化服务
-        self._embedding_engine: Optional[JinaEmbeddingEngine] = None
-        self._vector_store: Optional[ChromaVectorStore] = None
-        self._chatbot: Optional[OpenRouterChatBot] = None
-        self._graph_store: Optional = None
+        # 延迟初始化各个组件
+        self.embedding_engine: Optional[IEmbeddingEngine] = None
+        self.vector_store: Optional[IVectorStore] = None
+        self.graph_store: Optional[IGraphStore] = None
+        self.chatbot: Optional[IChatBot] = None
+        self.intent_analyzer: Optional[IntentAnalyzer] = None
         
-    @property
-    def embedding_engine(self) -> JinaEmbeddingEngine:
-        """获取嵌入引擎（延迟加载）"""
-        if self._embedding_engine is None:
-            self._embedding_engine = self.service_factory.get_embedding_engine()
-        return self._embedding_engine
+        logger.info(f"代码问答服务初始化，项目ID: {project_id}")
     
-    @property
-    def vector_store(self) -> ChromaVectorStore:
-        """获取向量存储（延迟加载）"""
-        if self._vector_store is None:
-            self._vector_store = self.service_factory.create_vector_store(project_id=self.project_id)
-        return self._vector_store
-    
-    @property
-    def chatbot(self) -> OpenRouterChatBot:
-        """获取聊天机器人（延迟加载）"""
-        if self._chatbot is None:
-            self._chatbot = self.service_factory.get_chatbot()
-        return self._chatbot
-    
-    @property
-    def graph_store(self):
-        """获取图存储（延迟加载）"""
-        if self._graph_store is None:
-            self._graph_store = self.service_factory.get_graph_store(project_id=self.project_id)
-        return self._graph_store
-    
-    def ask_code_question(self, question: str) -> str:
-        """询问代码相关问题 - 简化版本"""
-        try:
-            response = self.chatbot.ask_question(question)
-            return response.content
-        except Exception as e:
-            logger.error(f"代码问题回答失败: {e}")
-            raise ServiceError(f"Failed to answer question: {str(e)}")
+    def _ensure_services_initialized(self):
+        """确保所有服务都已初始化"""
+        if not self.embedding_engine:
+            self.embedding_engine = ServiceFactory.get_embedding_engine()
+        
+        if not self.vector_store:
+            factory = ServiceFactory()
+            self.vector_store = factory.create_vector_store(project_id=self.project_id)
+        
+        if not self.graph_store:
+            self.graph_store = ServiceFactory.get_graph_store(project_id=self.project_id)
+        
+        if not self.chatbot:
+            self.chatbot = ServiceFactory.get_chatbot()
+        
+        if not self.intent_analyzer:
+            self.intent_analyzer = IntentAnalyzer(self.chatbot)
     
     def ask_question(self, question: str, context: Optional[dict] = None) -> str:
         """询问代码相关问题
@@ -93,137 +69,93 @@ class CodeQAService:
         try:
             logger.info(f"收到代码问题: {question}")
             
-            # 初始化代码上下文
-            code_context = self._build_code_context(question, context)
+            # 确保所有服务已初始化
+            self._ensure_services_initialized()
             
-            # 调用聊天机器人，传入代码上下文
-            response = self.chatbot.ask_question(question, code_context)
+            # 使用意图分析器分析问题
+            logger.info("使用意图分析器分析用户问题...")
+            intent_analysis = self.intent_analyzer.analyze_question(question, context)
+            logger.info(f"意图分析结果: {intent_analysis}")
+            
+            # 构建增强的代码上下文
+            logger.info("构建代码上下文...")
+            code_context = self._build_enhanced_code_context(question, context, intent_analysis)
+            
+            # 记录上下文来源
+            context_sources = []
+            if context and context.get("focus_function"):
+                context_sources.append(f"指定函数: {context['focus_function']}")
+            if context and context.get("focus_file"):
+                context_sources.append(f"指定文件: {context['focus_file']}")
+            
+            # 从意图分析中获取的信息
+            if intent_analysis.get("functions"):
+                context_sources.append(f"检测到函数: {', '.join(intent_analysis['functions'])}")
+            if intent_analysis.get("files"):
+                context_sources.append(f"检测到文件: {', '.join(intent_analysis['files'])}")
+            
+            logger.info(f"上下文来源: {'; '.join(context_sources) if context_sources else '向量检索'}")
+            
+            # 调用LLM生成回答
+            logger.info("调用LLM生成回答...")
+            answer = self._generate_answer(question, code_context, intent_analysis)
             
             logger.info("问题回答完成")
-            return response.content
+            return answer
             
         except Exception as e:
-            logger.error(f"代码问题回答失败: {e}")
-            raise ServiceError(f"Failed to answer question: {str(e)}")
+            logger.error(f"问答过程中出错: {e}", exc_info=True)
+            return f"抱歉，在处理您的问题时遇到了错误: {str(e)}"
     
-    def _build_code_context(self, question: str, context: Optional[dict] = None) -> str:
-        """构建代码上下文，从多个来源获取相关代码
+    def _build_enhanced_code_context(self, question: str, context: Optional[dict], 
+                                   intent_analysis: Dict[str, Any]) -> str:
+        """构建增强的代码上下文
         
         Args:
             question: 用户问题
             context: 上下文信息
+            intent_analysis: 意图分析结果
             
         Returns:
             str: 代码上下文
         """
         code_context = ""
         
-        # 1. 从Neo4j获取函数代码
+        # 1. 处理明确指定的函数或文件
         if context and context.get("focus_function"):
             function_context = self._get_function_context(context["focus_function"])
             if function_context:
-                code_context += function_context
+                code_context += f"## 指定函数信息\n{function_context}\n\n"
         
-        # 2. 从文件获取代码
         if context and context.get("focus_file"):
             file_context = self._get_file_context(context["focus_file"])
             if file_context:
-                code_context += file_context
+                code_context += f"## 指定文件信息\n{file_context}\n\n"
         
-        # 3. 使用向量检索找到相关代码片段
-        try:
-            vector_context = self._get_vector_context(question)
-            if vector_context:
-                code_context += vector_context
-        except Exception as e:
-            logger.warning(f"向量检索相关代码片段失败: {e}")
+        # 2. 使用改进的向量检索
+        vector_context = self._get_enhanced_vector_context(question, intent_analysis)
+        if vector_context:
+            code_context += f"## 相关代码片段\n{vector_context}\n\n"
         
-        # 4. 从项目路径获取相关信息
-        if context and context.get("project_path"):
-            code_context += f"项目路径: {context['project_path']}\n\n"
+        # 3. 从Neo4j获取意图分析识别的函数
+        neo4j_context = self._get_neo4j_context_from_intent(intent_analysis)
+        if neo4j_context:
+            code_context += f"## 相关函数详情\n{neo4j_context}\n\n"
         
-        if not code_context:
-            logger.warning("未找到相关代码上下文")
-            code_context = "未找到相关代码上下文。请提供更多信息。"
+        # 4. 如果是调用关系问题，获取调用图信息
+        if intent_analysis.get("intent_type") == "call_relationship":
+            call_context = self._get_call_relationship_context(intent_analysis.get("functions", []))
+            if call_context:
+                code_context += f"## 函数调用关系\n{call_context}\n\n"
         
-        return code_context
+        return code_context.strip()
     
-    def _get_function_context(self, function_name: str) -> str:
-        """获取函数上下文
-        
-        Args:
-            function_name: 函数名
-            
-        Returns:
-            str: 函数上下文
-        """
-        context = ""
-        try:
-            # 使用项目特定的图存储
-            graph_store = self.graph_store
-            
-            # 从Neo4j检索函数代码
-            function_code = graph_store.get_function_code(function_name)
-            if function_code:
-                context += f"函数 '{function_name}' 的代码:\n```c\n{function_code}\n```\n\n"
-                
-                # 只有当函数存在时，才检索函数调用关系
-                try:
-                    callers = graph_store.query_function_callers(function_name)
-                    if callers:
-                        context += f"调用 '{function_name}' 的函数: {', '.join(callers)}\n\n"
-                except NotImplementedError:
-                    logger.debug("函数调用者查询功能未实现")
-                
-                try:
-                    callees = graph_store.query_function_calls(function_name)
-                    if callees:
-                        context += f"'{function_name}' 调用的函数: {', '.join(callees)}\n\n"
-                except NotImplementedError:
-                    logger.debug("函数被调用查询功能未实现")
-            else:
-                logger.warning(f"函数 '{function_name}' 未找到或没有代码")
-                
-        except Exception as e:
-            logger.warning(f"获取函数上下文失败: {e}")
-            
-        return context
-    
-    def _get_file_context(self, file_path: str) -> str:
-        """获取文件上下文
-        
-        Args:
-            file_path: 文件路径
-            
-        Returns:
-            str: 文件上下文
-        """
-        context = ""
-        try:
-            # 检查文件是否存在
-            if not os.path.exists(file_path):
-                logger.warning(f"文件不存在: {file_path}")
-                return context
-            
-            # 读取文件内容
-            with open(file_path, 'r') as f:
-                file_content = f.read()
-                
-            # 添加文件内容到上下文
-            context += f"文件 '{file_path}' 的代码:\n```c\n{file_content}\n```\n\n"
-                
-        except Exception as e:
-            logger.warning(f"获取文件上下文失败: {e}")
-            
-        return context
-    
-    def _get_vector_context(self, question: str, top_k: int = 3) -> str:
-        """获取向量上下文
-        
-        使用向量检索找到与问题相关的代码片段
+    def _get_enhanced_vector_context(self, question: str, intent_analysis: Dict[str, Any], top_k: int = 5) -> str:
+        """获取增强的向量上下文
         
         Args:
             question: 问题文本
+            intent_analysis: 意图分析结果
             top_k: 返回结果数量
             
         Returns:
@@ -231,7 +163,7 @@ class CodeQAService:
         """
         # 延迟加载嵌入引擎
         if not self.embedding_engine:
-            self.embedding_engine = JinaEmbeddingEngine()
+            self.embedding_engine = ServiceFactory.get_embedding_engine()
             if not self.embedding_engine.model:
                 self.embedding_engine.load_model("jinaai/jina-embeddings-v2-base-code")
         
@@ -241,53 +173,332 @@ class CodeQAService:
             return ""
         
         try:
-            # 生成问题的嵌入向量
-            question_embedding = self.embedding_engine.encode_text(question)
+            # 构建更智能的查询
+            search_queries = self._build_search_queries(question, intent_analysis)
             
-            # 从向量存储中检索相关代码片段
-            results = self.vector_store.search_similar(
-                query_vector=question_embedding,
-                top_k=top_k,
-                collection_name="code_embeddings"
-            )
+            all_results = []
+            for query in search_queries:
+                logger.info(f"向量检索查询: {query}")
+                
+                # 生成查询嵌入向量
+                query_embedding = self.embedding_engine.encode_text(query)
+                if query_embedding is None:
+                    continue
+                
+                # 确保嵌入向量是list格式
+                if hasattr(query_embedding, 'tolist'):
+                    query_vector = query_embedding.tolist()
+                else:
+                    query_vector = list(query_embedding)
+                
+                # 执行向量查询
+                results = self.vector_store.query_embeddings(
+                    query_vector=query_vector,
+                    n_results=top_k // len(search_queries) + 1,
+                    collection_name="code_embeddings"
+                )
+                
+                all_results.extend(results)
             
-            if not results:
-                logger.info("未找到相关代码片段")
+            # 去重并按相似度排序
+            unique_results = self._deduplicate_results(all_results)
+            top_results = sorted(unique_results, key=lambda x: x.get('distance', 1.0))[:top_k]
+            
+            if not top_results:
+                logger.warning("向量检索未找到相关结果")
                 return ""
             
             # 构建上下文
-            context = "## 相关代码片段\n\n"
-            
-            for i, result in enumerate(results):
-                # 获取代码片段元数据
+            context_parts = []
+            for i, result in enumerate(top_results):
                 metadata = result.get('metadata', {})
-                file_path = metadata.get('file_path', 'unknown')
-                start_line = metadata.get('start_line', 0)
-                end_line = metadata.get('end_line', 0)
-                function_name = metadata.get('function_name', '')
-                similarity = result.get('similarity', 0.0)
+                document = result.get('document', '')
+                distance = result.get('distance', 1.0)
                 
-                # 添加代码片段信息
-                context += f"### 片段 {i+1} (相似度: {similarity:.2f})\n"
-                if function_name:
-                    context += f"函数: `{function_name}`\n"
-                context += f"位置: `{file_path}:{start_line}-{end_line}`\n\n"
+                context_part = f"### 代码片段 {i+1} (相似度: {1-distance:.3f})\n"
                 
-                # 添加代码内容
-                context += f"```\n{result['document']}\n```\n\n"
+                # 添加元数据信息
+                if metadata.get('function_name'):
+                    context_part += f"**函数**: {metadata['function_name']}\n"
+                if metadata.get('file_path'):
+                    context_part += f"**文件**: {metadata['file_path']}\n"
+                if metadata.get('chunk_type'):
+                    context_part += f"**类型**: {metadata['chunk_type']}\n"
+                
+                context_part += f"**代码**:\n```c\n{document}\n```\n"
+                context_parts.append(context_part)
             
-            return context
+            logger.info(f"向量检索找到 {len(top_results)} 个相关代码片段")
+            return "\n".join(context_parts)
             
         except Exception as e:
-            logger.warning(f"向量检索相关代码片段失败: {e}")
+            logger.error(f"向量检索失败: {e}")
             return ""
     
-    def generate_code_summary(self, code_content: str, file_path: Optional[str] = None) -> str:
-        """生成代码摘要 - 用户明确要求的功能"""
+    def _build_search_queries(self, question: str, intent_analysis: Dict[str, Any]) -> List[str]:
+        """构建搜索查询列表
+        
+        Args:
+            question: 原始问题
+            intent_analysis: 意图分析结果
+            
+        Returns:
+            List[str]: 搜索查询列表
+        """
+        queries = []
+        
+        # 1. 原始问题
+        queries.append(question)
+        
+        # 2. 基于函数名的查询
+        for func_name in intent_analysis.get("functions", []):
+            queries.append(f"{func_name} function implementation")
+            queries.append(f"{func_name} definition")
+        
+        # 3. 基于关键词的查询
+        keywords = intent_analysis.get("keywords", [])
+        if keywords:
+            queries.append(" ".join(keywords))
+        
+        # 4. 基于搜索词的查询
+        search_terms = intent_analysis.get("search_terms", [])
+        if search_terms:
+            queries.append(" ".join(search_terms))
+        
+        # 5. 基于意图类型的特定查询
+        intent_type = intent_analysis.get("intent_type", "")
+        if intent_type == "call_relationship":
+            for func_name in intent_analysis.get("functions", []):
+                queries.append(f"function calls {func_name}")
+                queries.append(f"{func_name} caller")
+        elif intent_type == "function_analysis":
+            for func_name in intent_analysis.get("functions", []):
+                queries.append(f"{func_name} function purpose")
+                queries.append(f"what does {func_name} do")
+        
+        # 去重并限制数量
+        unique_queries = list(dict.fromkeys(queries))  # 保持顺序的去重
+        return unique_queries[:3]  # 限制查询数量避免过度检索
+    
+    def _deduplicate_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """去重检索结果
+        
+        Args:
+            results: 检索结果列表
+            
+        Returns:
+            List[Dict[str, Any]]: 去重后的结果
+        """
+        seen_documents = set()
+        unique_results = []
+        
+        for result in results:
+            document = result.get('document', '')
+            # 使用文档内容的前100个字符作为去重标识
+            doc_key = document[:100] if document else ''
+            
+            if doc_key not in seen_documents:
+                seen_documents.add(doc_key)
+                unique_results.append(result)
+        
+        return unique_results
+    
+    def _get_neo4j_context_from_intent(self, intent_analysis: Dict[str, Any]) -> str:
+        """从意图分析结果获取Neo4j上下文
+        
+        Args:
+            intent_analysis: 意图分析结果
+            
+        Returns:
+            str: Neo4j上下文
+        """
+        logger.info("开始从Neo4j获取上下文...")
+        
+        if not self.graph_store:
+            logger.warning("Neo4j图存储未初始化，跳过Neo4j查询")
+            return ""
+        
+        functions = intent_analysis.get("functions", [])
+        logger.info(f"从意图分析中提取的函数列表: {functions}")
+        
+        if not functions:
+            logger.info("没有检测到函数，跳过Neo4j查询")
+            return ""
+        
+        context_parts = []
+        
+        # 获取意图分析识别的函数信息
+        for func_name in functions:
+            logger.info(f"正在从Neo4j查询函数: {func_name}")
+            func_info = self._get_function_context(func_name)
+            if func_info:
+                logger.info(f"成功从Neo4j获取函数 {func_name} 的信息，长度: {len(func_info)} 字符")
+                context_parts.append(f"### 函数: {func_name}\n{func_info}")
+            else:
+                logger.warning(f"未能从Neo4j获取函数 {func_name} 的信息")
+        
+        result = "\n\n".join(context_parts)
+        logger.info(f"Neo4j上下文构建完成，总长度: {len(result)} 字符")
+        return result
+    
+    def _get_call_relationship_context(self, function_names: List[str]) -> str:
+        """获取函数调用关系上下文
+        
+        Args:
+            function_names: 函数名列表
+            
+        Returns:
+            str: 调用关系上下文
+        """
+        if not self.graph_store or not function_names:
+            return ""
+        
+        context_parts = []
+        
+        for func_name in function_names:
+            try:
+                # 查询调用关系
+                callers = self.graph_store.query_function_callers(func_name)
+                callees = self.graph_store.query_function_calls(func_name)
+                
+                if callers or callees:
+                    context_part = f"### {func_name} 调用关系\n"
+                    
+                    if callers:
+                        caller_names = [caller.get('caller_name', 'unknown') for caller in callers]
+                        context_part += f"**被以下函数调用**: {', '.join(caller_names)}\n"
+                    
+                    if callees:
+                        callee_names = [callee.get('callee_name', 'unknown') for callee in callees]
+                        context_part += f"**调用以下函数**: {', '.join(callee_names)}\n"
+                    
+                    context_parts.append(context_part)
+                    
+            except Exception as e:
+                logger.warning(f"查询函数 {func_name} 的调用关系失败: {e}")
+        
+        return "\n\n".join(context_parts)
+    
+    def _get_function_context(self, function_name: str) -> str:
+        """获取函数上下文信息
+        
+        Args:
+            function_name: 函数名
+            
+        Returns:
+            str: 函数上下文
+        """
+        logger.info(f"开始获取函数 {function_name} 的上下文...")
+        
+        if not self.graph_store:
+            logger.warning("Neo4j图存储未初始化")
+            return ""
+        
         try:
-            response = self.chatbot.generate_summary(code_content, file_path)
-            return response.content
+            logger.info(f"调用Neo4j查询函数代码: {function_name}")
+            # 从Neo4j获取函数代码
+            function_code = self.graph_store.get_function_code(function_name)
+            
+            if function_code:
+                logger.info(f"成功获取函数 {function_name} 的代码，长度: {len(function_code)} 字符")
+                return f"```c\n{function_code}\n```"
+            else:
+                logger.warning(f"函数 '{function_name}' 未找到")
+                return ""
+                
         except Exception as e:
-            logger.error(f"代码摘要生成失败: {e}")
-            raise ServiceError(f"Failed to generate summary: {str(e)}")
+            logger.error(f"获取函数 {function_name} 上下文失败: {e}", exc_info=True)
+            return ""
+    
+    def _get_file_context(self, file_path: str) -> str:
+        """获取文件上下文信息
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            str: 文件上下文
+        """
+        try:
+            # 这里可以实现文件内容读取逻辑
+            # 暂时返回空字符串
+            return ""
+        except Exception as e:
+            logger.error(f"获取文件 {file_path} 上下文失败: {e}")
+            return ""
+    
+    def _generate_answer(self, question: str, code_context: str, intent_analysis: Dict[str, Any]) -> str:
+        """生成回答
+        
+        Args:
+            question: 用户问题
+            code_context: 代码上下文
+            intent_analysis: 意图分析结果
+            
+        Returns:
+            str: 生成的回答
+        """
+        try:
+            # 构建专门的问答提示
+            system_prompt = self._build_qa_system_prompt(intent_analysis)
+            
+            # 构建用户提示
+            user_prompt = f"""请基于提供的代码上下文回答以下问题：
+
+{question}
+
+请提供详细、准确的回答，包括：
+1. 直接回答用户的问题
+2. 相关的代码解释
+3. 如果涉及函数调用关系，请说明调用链
+4. 如果有潜在问题或改进建议，请指出
+
+回答要求：
+- 使用中文回答
+- 保持技术准确性
+- 提供具体的代码示例
+- 结构清晰，易于理解
+"""
+            
+                         # 调用LLM
+            response = self.chatbot.ask_question(user_prompt, code_context)
+            
+            return response.content if response and response.content else "抱歉，无法生成回答。"
+            
+        except Exception as e:
+            logger.error(f"生成回答失败: {e}")
+            return f"生成回答时出错: {str(e)}"
+    
+    def _build_qa_system_prompt(self, intent_analysis: Dict[str, Any]) -> str:
+        """构建问答系统提示
+        
+        Args:
+            intent_analysis: 意图分析结果
+            
+        Returns:
+            str: 系统提示
+        """
+        intent_type = intent_analysis.get("intent_type", "general_question")
+        
+        base_prompt = """你是一个专业的C语言代码分析专家，专门帮助开发者理解OpenSBI等系统级代码。"""
+        
+        if intent_type == "function_analysis":
+            return base_prompt + """
+你的任务是分析函数的功能、参数、返回值和实现逻辑。
+请详细解释函数的作用、工作原理，以及在系统中的重要性。
+"""
+        elif intent_type == "call_relationship":
+            return base_prompt + """
+你的任务是分析函数之间的调用关系。
+请说明哪些函数调用了目标函数，目标函数又调用了哪些函数，以及整个调用链的作用。
+"""
+        elif intent_type == "file_analysis":
+            return base_prompt + """
+你的任务是分析文件的结构和功能。
+请说明文件的作用、包含的主要函数和数据结构。
+"""
+        else:
+            return base_prompt + """
+请根据用户的问题和提供的代码上下文，给出准确、详细的回答。
+"""
  

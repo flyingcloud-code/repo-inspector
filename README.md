@@ -103,6 +103,11 @@ code-learner embed-code --strategy tree_sitter --dir <项目路径> --collection
   - [x] 实现从Neo4j检索函数代码
   - [x] 添加向量检索功能
   - [x] 增强上下文理解能力
+- [x] 智能意图分析系统 (2025-06-28)
+  - [x] 实现LLM驱动的用户问题分析
+  - [x] 智能提取函数名、文件名和关键词
+  - [x] 多查询向量检索策略
+  - [x] Neo4j和Chroma双数据源集成
 - [x] 多种代码分块策略 (2025-06-28)
   - [x] Tree-sitter分块策略（不依赖Neo4j）
   - [x] 固定大小分块策略

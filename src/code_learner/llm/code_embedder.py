@@ -6,14 +6,17 @@
 """
 import os
 import time
+import logging
 from typing import List, Dict, Any, Optional, Set
 from pathlib import Path
 import hashlib
 import json
+import uuid
 
 from .code_chunker import CodeChunk, CodeChunker
 from .embedding_engine import JinaEmbeddingEngine
 from .vector_store import ChromaVectorStore
+from .memory_manager import MemoryManager
 from ..core.data_models import EmbeddingData
 from ..utils.logger import get_logger
 
@@ -24,12 +27,14 @@ class CodeEmbedder:
     """代码嵌入器
     
     负责将预处理好的代码块(CodeChunk)列表转换为嵌入向量并存储到向量数据库。
+    遵循单一职责原则，专注于嵌入生成和存储。
     """
     
     def __init__(self, 
                 embedding_engine: JinaEmbeddingEngine,
                 vector_store: ChromaVectorStore,
-                batch_size: int = 50
+                batch_size: int = 10,
+                memory_manager: Optional[MemoryManager] = None
                 ):
         """初始化代码嵌入器
         
@@ -37,15 +42,17 @@ class CodeEmbedder:
             embedding_engine: 嵌入引擎实例
             vector_store: 向量存储实例
             batch_size: 批处理大小
+            memory_manager: 内存管理器（可选，遵循DIP原则）
         """
         self.embedding_engine = embedding_engine
         self.vector_store = vector_store
         self.batch_size = batch_size
+        self.memory_manager = memory_manager or MemoryManager()
         
-        logger.info(f"初始化代码嵌入器: batch_size={self.batch_size}")
+        logger.info(f"初始化代码嵌入器: batch_size={batch_size}")
     
     def embed_code_chunks(self, chunks: List[CodeChunk], collection_name: str) -> bool:
-        """处理代码块
+        """处理代码块（简化版本，遵循KISS原则）
         
         Args:
             chunks: 代码块列表
@@ -59,77 +66,94 @@ class CodeEmbedder:
             return True
         
         logger.info(f"▶️ 开始处理 {len(chunks)} 个代码块，存入集合 '{collection_name}'...")
+        self.memory_manager.log_memory_usage("开始处理")
         
         try:
             # 确保集合存在
             self.vector_store.create_collection(collection_name)
 
-            # 批量处理
-            num_batches = (len(chunks) + self.batch_size - 1) // self.batch_size
-            logger.info(f"将创建 {num_batches} 个批次")
+            # 简化的批量处理逻辑
+            current_batch_size = self.batch_size
+            num_batches = (len(chunks) + current_batch_size - 1) // current_batch_size
+            logger.info(f"将创建 {num_batches} 个批次，批次大小: {current_batch_size}")
 
-            for i in range(0, len(chunks), self.batch_size):
-                batch_chunks = chunks[i:i+self.batch_size]
-                batch_idx = i // self.batch_size
-                logger.info(f"▶️ 开始处理批次 {batch_idx+1}/{num_batches}，包含 {len(batch_chunks)} 个块")
+            for i in range(0, len(chunks), current_batch_size):
+                # 简化的内存检查：只在内存压力过高时减少批次大小
+                suggested_size = self.memory_manager.suggest_batch_size_reduction(current_batch_size)
+                if suggested_size:
+                    current_batch_size = suggested_size
                 
-                # 提取批次内容
-                batch_content = [chunk.content for chunk in batch_chunks]
+                batch_chunks = chunks[i:i+current_batch_size]
+                batch_idx = i // self.batch_size + 1
+                logger.info(f"▶️ 处理批次 {batch_idx}/{num_batches}，包含 {len(batch_chunks)} 个块")
                 
-                # 生成嵌入向量
-                batch_embeddings = self.embedding_engine.encode_batch(batch_content)
-                
-                if len(batch_embeddings) != len(batch_chunks):
-                    logger.error(f"嵌入结果数量与块数量不匹配: {len(batch_embeddings)} vs {len(batch_chunks)}")
+                # 核心嵌入逻辑（保持简单）
+                success = self._process_batch(batch_chunks, collection_name)
+                if not success:
                     return False
                 
-                # 准备要存储的数据
-                embeddings_to_store = []
-                for chunk, vector in zip(batch_chunks, batch_embeddings):
-                    # 清理元数据，确保没有None值
-                    clean_metadata = self._clean_metadata({
-                        "source": chunk.file_path or "",
-                        "start_line": chunk.start_line,
-                        "end_line": chunk.end_line,
-                        "function_name": chunk.function_name or "",
-                        "embedding_time": time.time(),
-                        "strategy": chunk.metadata.get("strategy", "unknown"),
-                        "type": chunk.metadata.get("type", "unknown"),
-                        "name": chunk.metadata.get("name", "")
-                    })
-                    
-                    embedding_data = EmbeddingData(
-                        id=chunk.id,
-                        text=chunk.content,
-                        embedding=vector,
-                        metadata=clean_metadata
-                    )
-                    embeddings_to_store.append(embedding_data)
+                # 简化的内存清理
+                self.memory_manager.cleanup_memory()
                 
-                logger.info(f"批次 {batch_idx+1}/{num_batches} 的 {len(embeddings_to_store)} 个嵌入向量生成完毕")
-
-                # 存储嵌入
-                if embeddings_to_store:
-                    logger.info(f"存储批次 {batch_idx+1}/{num_batches} 的 {len(embeddings_to_store)} 个嵌入")
-                    
-                    # 格式化数据为ChromaVectorStore期望的格式
-                    texts = [emb.text for emb in embeddings_to_store]
-                    vectors = [emb.embedding for emb in embeddings_to_store]
-                    metadatas = [emb.metadata for emb in embeddings_to_store]
-                    
-                    success = self.vector_store.add_embeddings(texts, vectors, metadatas, collection_name)
-                    if not success:
-                        logger.error(f"批次 {batch_idx+1}/{num_batches} 嵌入存储失败")
-                        return False
-                    
-                    logger.info(f"批次 {batch_idx+1}/{num_batches} 嵌入存储成功: {len(embeddings_to_store)} 个")
+                # 只在关键点记录内存使用
+                if batch_idx % 10 == 0:  # 每10个批次记录一次
+                    self.memory_manager.log_memory_usage(f"批次{batch_idx}")
             
             logger.info(f"✅ 所有 {len(chunks)} 个代码块处理完成")
+            self.memory_manager.log_memory_usage("处理完成")
             return True
             
         except Exception as e:
             logger.error(f"代码块处理失败: {e}", exc_info=True)
             return False
+    
+    def _process_batch(self, batch_chunks: List[CodeChunk], collection_name: str) -> bool:
+        """处理单个批次（简化版本）"""
+        # 提取批次内容
+        batch_content = [chunk.content for chunk in batch_chunks]
+        
+        # 生成嵌入向量
+        batch_embeddings = self.embedding_engine.encode_batch(batch_content)
+        
+        if len(batch_embeddings) != len(batch_chunks):
+            logger.error(f"嵌入结果数量与块数量不匹配: {len(batch_embeddings)} vs {len(batch_chunks)}")
+            return False
+        
+        # 准备要存储的数据
+        embeddings_to_store = []
+        for chunk, vector in zip(batch_chunks, batch_embeddings):
+            clean_metadata = self._clean_metadata({
+                "source": chunk.file_path or "",
+                "start_line": chunk.start_line,
+                "end_line": chunk.end_line,
+                "function_name": chunk.function_name or "",
+                "embedding_time": time.time(),
+                "strategy": chunk.metadata.get("strategy", "unknown"),
+                "type": chunk.metadata.get("type", "unknown"),
+                "name": chunk.metadata.get("name", "")
+            })
+            
+            embedding_data = EmbeddingData(
+                id=chunk.id,
+                text=chunk.content,
+                embedding=vector,
+                metadata=clean_metadata
+            )
+            embeddings_to_store.append(embedding_data)
+        
+        # 存储嵌入
+        if embeddings_to_store:
+            # 格式化数据为ChromaVectorStore期望的格式
+            texts = [emb.text for emb in embeddings_to_store]
+            vectors = [emb.embedding for emb in embeddings_to_store]
+            metadatas = [emb.metadata for emb in embeddings_to_store]
+            
+            success = self.vector_store.add_embeddings(texts, vectors, metadatas, collection_name)
+            if not success:
+                logger.error(f"批次嵌入存储失败")
+                return False
+        
+        return True
 
     def process_file(self, file_path: str, force_update: bool = False) -> bool:
         """处理单个文件

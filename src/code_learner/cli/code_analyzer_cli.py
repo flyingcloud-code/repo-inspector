@@ -78,8 +78,7 @@ class CodeAnalyzer:
         self.code_chunker = CodeChunker()
         self.code_embedder = CodeEmbedder(
             embedding_engine=self.embedding_engine,
-            vector_store=self.vector_store,
-            batch_size=50
+            vector_store=self.vector_store
         )
         
         # 初始化其他服务

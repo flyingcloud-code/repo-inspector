@@ -1724,3 +1724,117 @@ class Neo4jGraphStore(IGraphStore):
         except Exception as e:
             logger.error(f"执行查询失败: {e}")
             raise StorageError("run_query", str(e)) 
+
+    def search_functions_by_keywords(self, keywords: List[str], max_results: int = 5) -> List[Dict[str, Any]]:
+        """通过关键词搜索函数
+        
+        Args:
+            keywords: 关键词列表
+            max_results: 最大返回结果数
+            
+        Returns:
+            List[Dict[str, Any]]: 函数列表
+        """
+        if not self.driver:
+            logger.error("数据库连接未初始化")
+            return []
+            
+        if not keywords:
+            logger.warning("未提供关键词")
+            return []
+            
+        try:
+            with self.driver.session() as session:
+                # 构建查询
+                # 1. 首先尝试在函数名中匹配关键词
+                name_conditions = []
+                for keyword in keywords:
+                    name_conditions.append(f"toLower(f.name) CONTAINS toLower('{keyword}')")
+                    
+                name_query = " OR ".join(name_conditions)
+                
+                # 构建完整查询
+                query = f"""
+                MATCH (f:Function)
+                WHERE {name_query}
+                """
+                
+                # 添加项目ID过滤
+                if self.project_id:
+                    query += f" AND f.project_id = $project_id"
+                    
+                # 添加排序和限制
+                query += """
+                RETURN f.name as name, f.file_path as file_path, 
+                       f.start_line as start_line, f.end_line as end_line
+                LIMIT $limit
+                """
+                
+                # 准备参数
+                params = {"limit": max_results}
+                if self.project_id:
+                    params["project_id"] = self.project_id
+                    
+                # 执行查询
+                logger.debug(f"执行关键词搜索查询: {query}")
+                logger.debug(f"查询参数: {params}")
+                
+                result = session.run(query, params)
+                functions = [dict(record) for record in result]
+                
+                # 如果没有找到足够的结果，尝试更宽松的搜索（在代码中搜索关键词）
+                if len(functions) < max_results:
+                    remaining = max_results - len(functions)
+                    
+                    # 避免重复结果
+                    existing_names = [f["name"] for f in functions]
+                    exclude_clause = ""
+                    if existing_names:
+                        name_list = ", ".join([f"'{name}'" for name in existing_names])
+                        exclude_clause = f" AND NOT f.name IN [{name_list}]"
+                    
+                    # 构建代码搜索查询
+                    code_query = f"""
+                    MATCH (f:Function)
+                    WHERE f.code IS NOT NULL {exclude_clause}
+                    """
+                    
+                    # 添加项目ID过滤
+                    if self.project_id:
+                        code_query += f" AND f.project_id = $project_id"
+                        
+                    # 添加关键词过滤
+                    code_conditions = []
+                    for i, keyword in enumerate(keywords):
+                        code_conditions.append(f"toLower(f.code) CONTAINS toLower($keyword{i})")
+                        params[f"keyword{i}"] = keyword
+                        
+                    if code_conditions:
+                        code_query += " AND (" + " OR ".join(code_conditions) + ")"
+                        
+                    # 添加排序和限制
+                    code_query += """
+                    RETURN f.name as name, f.file_path as file_path, 
+                           f.start_line as start_line, f.end_line as end_line
+                    LIMIT $remaining
+                    """
+                    
+                    # 更新参数
+                    params["remaining"] = remaining
+                    
+                    # 执行代码搜索查询
+                    logger.debug(f"执行代码内容搜索查询: {code_query}")
+                    logger.debug(f"查询参数: {params}")
+                    
+                    code_result = session.run(code_query, params)
+                    code_functions = [dict(record) for record in code_result]
+                    
+                    # 合并结果
+                    functions.extend(code_functions)
+                
+                logger.info(f"关键词搜索找到 {len(functions)} 个函数")
+                return functions
+                
+        except Exception as e:
+            logger.error(f"关键词搜索函数失败: {e}")
+            return [] 
