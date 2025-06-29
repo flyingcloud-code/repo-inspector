@@ -9,6 +9,9 @@ import json
 from typing import List, Dict, Any, Optional
 from dataclasses import asdict
 import requests
+import os
+from dotenv import load_dotenv, find_dotenv
+import time
 
 from ..core.interfaces import IChatBot
 from ..core.data_models import ChatMessage, ChatResponse
@@ -24,13 +27,20 @@ class OpenRouterChatBot(IChatBot):
     支持代码问答和摘要生成，专门针对repo级别代码理解优化
     """
     
-    def __init__(self, api_key: str, base_url: str = "https://openrouter.ai/api/v1/chat/completions"):
+    def __init__(self, api_key: str = None, base_url: str = "https://openrouter.ai/api/v1/chat/completions"):
         """初始化OpenRouter聊天机器人
         
         Args:
             api_key: OpenRouter API密钥
             base_url: API基础URL
         """
+        # 如果没有提供API密钥，尝试从环境变量获取
+        if not api_key:
+            load_dotenv(find_dotenv())
+            api_key = os.getenv('OPENROUTER_API_KEY')
+            if api_key:
+                logger.info("✅ 从环境变量加载了OpenRouter API密钥")
+            
         self.api_key = api_key
         self.base_url = base_url
         self.model_name: str = "google/gemini-2.0-flash-001"  # 默认模型
@@ -45,6 +55,7 @@ class OpenRouterChatBot(IChatBot):
         
         # 验证API密钥
         if not api_key:
+            logger.warning("⚠️ OpenRouter API密钥未设置，请通过环境变量OPENROUTER_API_KEY或配置文件设置")
             raise APIConnectionError("OpenRouter API密钥不能为空")
     
     def initialize(self, api_key: str, model: str) -> bool:
@@ -163,6 +174,67 @@ class OpenRouterChatBot(IChatBot):
             logger.error(f"❌ 多轮对话失败: {e}")
             raise ModelError(f"Failed to chat with context: {str(e)}")
     
+    def chat_with_messages(self, messages: List[Dict[str, str]]) -> str:
+        """使用消息列表进行对话
+        
+        Args:
+            messages: 消息列表，每个消息包含role和content
+            
+        Returns:
+            str: 模型回复的内容
+        """
+        try:
+            # 准备请求头
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            
+            # 准备请求体
+            data = {
+                "model": self.model_name,
+                "messages": messages,
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "stream": False
+            }
+            
+            # 发送请求
+            logger.info(f"🔄 发送请求到OpenRouter API: {self.model_name}")
+            start_time = time.time()
+            response = requests.post(self.base_url, headers=headers, json=data)
+            end_time = time.time()
+            
+            # 检查响应状态
+            if response.status_code != 200:
+                logger.error(f"❌ API请求失败: {response.status_code} - {response.text}")
+                return ""
+            
+            # 解析响应
+            response_json = response.json()
+            if "choices" not in response_json or not response_json["choices"]:
+                logger.error(f"❌ API响应格式错误: {response_json}")
+                return ""
+            
+            # 提取回复内容
+            reply = response_json["choices"][0]["message"]["content"]
+            
+            # 记录统计信息
+            tokens_used = response_json.get("usage", {})
+            prompt_tokens = tokens_used.get("prompt_tokens", 0)
+            completion_tokens = tokens_used.get("completion_tokens", 0)
+            total_tokens = tokens_used.get("total_tokens", 0)
+            
+            logger.info(f"✅ 请求完成: {end_time - start_time:.2f}秒")
+            logger.info(f"📊 Token统计: 输入={prompt_tokens}, 输出={completion_tokens}, 总计={total_tokens}")
+            
+            return reply
+            
+        except Exception as e:
+            logger.error(f"❌ 请求失败: {str(e)}")
+            return ""
+    
     def _build_qa_messages(self, question: str, context: Optional[str] = None) -> List[Dict[str, str]]:
         """构建问答消息
         
@@ -277,7 +349,6 @@ class OpenRouterChatBot(IChatBot):
                 elif response.status_code == 429:
                     # 速率限制，等待后重试
                     if attempt < self.max_retries - 1:
-                        import time
                         wait_time = 2 ** attempt  # 指数退避
                         logger.warning(f"⚠️ API速率限制，等待 {wait_time} 秒后重试")
                         time.sleep(wait_time)

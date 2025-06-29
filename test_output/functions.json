@@ -1,0 +1,51 @@
+[
+  {
+    "name": "main",
+    "file_path": "test_project/main.c",
+    "start_line": 7,
+    "end_line": 22,
+    "calls": []
+  },
+  {
+    "name": "square_sum",
+    "file_path": "test_project/math_utils.c",
+    "start_line": 6,
+    "end_line": 8,
+    "calls": []
+  },
+  {
+    "name": "average",
+    "file_path": "test_project/math_utils.c",
+    "start_line": 13,
+    "end_line": 15,
+    "calls": []
+  },
+  {
+    "name": "add",
+    "file_path": "test_project/utils.c",
+    "start_line": 6,
+    "end_line": 8,
+    "calls": []
+  },
+  {
+    "name": "subtract",
+    "file_path": "test_project/utils.c",
+    "start_line": 13,
+    "end_line": 15,
+    "calls": []
+  },
+  {
+    "name": "multiply",
+    "file_path": "test_project/utils.c",
+    "start_line": 20,
+    "end_line": 22,
+    "calls": []
+  },
+  {
+    "name": "is_even",
+    "file_path": "test_project/utils.c",
+    "start_line": 27,
+    "end_line": 29,
+    "calls": []
+  }
+]

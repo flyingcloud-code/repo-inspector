@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 from ..core.exceptions import ConfigurationError
 from ..core.data_models import (
     Config, DatabaseConfig, VectorStoreConfig, LLMConfig, 
-    ParserConfig, LoggingConfig, PerformanceConfig, AppConfig
+    ParserConfig, LoggingConfig, PerformanceConfig, AppConfig,
+    EmbeddingConfig, EnhancedQueryConfig
 )
 
 logger = logging.getLogger(__name__)

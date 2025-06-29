@@ -863,61 +863,42 @@ sequenceDiagram
 
 ## 7. CLI应用设计
 
-### 7.1 Click命令结构
+### 7.1 CLI命令概览（已实现）
 
-```python
-# cli/main.py
+```bash
+# 一键式统一分析（推荐）
+code-learner-all <项目路径> [选项]
 
-import click
-from ..core.interfaces import IParser, IGraphStore, IVectorStore
-from ..config.config_manager import ConfigManager
+# 代码分析子命令
+code-learner analyze <项目路径> [--output-dir DIR] [--threads N] [--include PATTERNS] [--exclude PATTERNS]
 
-@click.group()
-@click.version_option(version="0.1.0")
-def cli():
-    """C语言智能代码分析调试工具"""
-    pass
+# 交互式问答子命令
+code-learner query --project <项目路径> [--function FUNC] [--file FILE] [--history FILE]
 
-@cli.command()
-@click.argument('repo_path', type=click.Path(exists=True))
-@click.option('--output', '-o', default='./analysis_result', help='输出目录')
-def analyze(repo_path: str, output: str):
-    """分析C语言代码仓库"""
-    click.echo(f"开始分析仓库: {repo_path}")
-    # 实现分析逻辑
+# 函数调用图专用
+call-graph <项目路径> [--function FUNC] [--output-format dot]
 
-@cli.command()
-@click.argument('question')
-@click.option('--context', '-c', default=5, help='上下文数量')
-def ask(question: str, context: int):
-    """向AI助手提问"""
-    click.echo(f"问题: {question}")
-    # 实现问答逻辑
+# 依赖关系分析专用
+dependency-graph <项目路径> [--file FILE] [--check-cycles]
 
-@cli.command()
-def setup():
-    """初始化环境和数据库"""
-    click.echo("正在初始化环境...")
-    # 实现环境初始化
-
-if __name__ == '__main__':
-    cli()
+# 系统状态与导出
+code-learner status [--verbose]
+code-learner export --project <项目路径> --format html --output result.html
 ```
 
-### 7.2 外部API设计
+> **说明**：所有命令基于 Click 框架实现，入口位于 `cli/main.py`。`code-learner-all` 封装了最常用的分析步骤，可自动生成项目 ID 并确保项目隔离。
+
+### 7.2 程序化接口示例
 
 ```python
-# 命令行接口
-code-learner analyze /path/to/c/repo --output ./results
-code-learner ask "这个函数的作用是什么?" --context 5
-code-learner setup  # 初始化环境
-
-# 程序化接口
 from code_learner import CodeAnalyzer
 
 analyzer = CodeAnalyzer()
-result = analyzer.analyze_repository("/path/to/repo")
-answer = analyzer.ask_question("问题", context_limit=5)
+# 代码分析
+analysis_info = analyzer.analyze_repository("/path/to/project")
+# 代码问答
+answer = analyzer.ask_question("malloc 函数在哪里被调用？", context_limit=5)
+print(answer)
 ```
 
 ## 8. 里程碑与故事规划
@@ -939,8 +920,8 @@ gantt
     问答系统              :m6, 2025-06-23, 4d
     
     section CLI工具
-    命令行实现            :m7, 2025-06-27, 2d
-    交互式问答            :m8, 2025-06-29, 2d
+    命令行实现            :done, m7, 2025-06-27, 2d
+    交互式问答            :done, m8, 2025-06-29, 2d
     
     section 测试与优化
     集成测试              :m9, 2025-07-01, 3d
@@ -957,9 +938,9 @@ gantt
 | 1 - 基础架构 | 1.4 | Chroma存储实现 | ✅ 已完成 | 代码解析->向量嵌入->存储 |
 | 2 - 核心功能 | 2.1 | 函数调用图实现 | 🔄 进行中 | 代码解析->图数据库存储->查询 |
 | 2 - 核心功能 | 2.2 | 依赖分析服务 | 🔄 进行中 | 代码解析->图数据库查询 |
-| 2 - 核心功能 | 2.3 | 实用CLI工具 | 📋 待开始 | 命令行界面->项目管理器 |
-| 3 - 问答系统 | 3.1 | 代码问答服务 | 📋 待开始 | 完整问答交互流程 |
-| 3 - 问答系统 | 3.2 | 交互式问答 | 📋 待开始 | 问答交互流程 |
+| 2 - 核心功能 | 2.3 | 实用CLI工具 | ✅ 已完成 | 命令行界面->项目管理器 |
+| 3 - 问答系统 | 3.1 | 代码问答服务 | ✅ 已完成 | 完整问答交互流程 |
+| 3 - 问答系统 | 3.2 | 交互式问答 | ✅ 已完成 | 问答交互流程 |
 
 ### 8.3 实现目标工作流的关键故事
 
@@ -969,11 +950,211 @@ gantt
 2. **代码解析与存储**：Story 1.2（C语言解析器）+ Story 1.3（Neo4j存储）+ Story 1.4（Chroma存储）
 3. **问答交互**：Story 3.1（代码问答服务）+ Story 3.2（交互式问答）
 
-**当前状态**：基础架构已完成，核心功能部分完成，CLI工具和问答系统待实现。要达成完整工作流，需优先完成Story 2.3和Story 3.1。
+**当前状态**：基础架构和核心功能已完成，CLI工具与问答系统已上线运行，当前重点转向性能优化与高级功能开发。
 
-## 9. POC成功标准
+## 9. 增强查询系统架构 v2.0
 
-### 9.1 技术验证目标
+### 9.1 多源检索 + 统一Rerank设计
+
+基于KISS和SOLID原则，我们采用**并行检索 + 统一Rerank**的架构，充分利用Neo4j图数据库的27M+关系数据。
+
+#### 9.1.1 核心架构图
+
+```mermaid
+graph LR
+    A[用户查询] --> B[意图分析器]
+    B --> C[多源检索层]
+    C --> D[Vector检索器]
+    C --> E[CallGraph检索器] 
+    C --> F[Dependency检索器]
+    D --> G[LLM Reranker]
+    E --> G
+    F --> G
+    G --> H[QA LLM]
+    H --> I[最终回答]
+    
+    style G fill:#f9f,stroke:#333,stroke-width:2
+    style C fill:#bbf,stroke:#333,stroke-width:2
+```
+
+#### 9.1.2 设计原则
+
+- **KISS原则**: 简单的管道式架构，每个组件职责清晰
+- **SOLID原则**: 单一职责，开放封闭，易于扩展
+- **可配置性**: 每个源的top-k和最终top-k都可配置
+- **并行处理**: 所有检索器并行执行，提高性能
+
+### 9.2 核心组件设计
+
+#### 9.2.1 统一上下文项接口
+
+```python
+@dataclass
+class ContextItem:
+    content: str
+    source_type: str  # "vector", "call_graph", "dependency"
+    relevance_score: float
+    metadata: Dict[str, Any]
+    
+    def to_rerank_format(self) -> str:
+        """转换为rerank输入格式"""
+        return f"[{self.source_type.upper()}] {self.content[:200]}..."
+```
+
+#### 9.2.2 检索器接口 (SOLID - 接口隔离原则)
+
+```python
+class IContextRetriever(ABC):
+    @abstractmethod
+    def retrieve(self, query: str, intent_analysis: Dict, top_k: int = 5) -> List[ContextItem]:
+        pass
+```
+
+#### 9.2.3 具体检索器实现
+
+**VectorContextRetriever**: 基于语义相似度的向量检索
+- 使用现有的Chroma向量数据库
+- 支持多查询策略
+- 返回相似度评分
+
+**CallGraphContextRetriever**: 基于函数调用关系的图检索
+- 利用Neo4j的调用关系数据
+- 获取函数的调用者和被调用者
+- 支持调用链深度分析
+
+**DependencyContextRetriever**: 基于依赖关系的图检索
+- 获取文件依赖关系
+- 模块依赖分析
+- 循环依赖检测
+
+#### 9.2.4 LLM Reranker
+
+```python
+class LLMReranker:
+    def rerank(self, query: str, context_items: List[ContextItem], top_k: int = 5) -> List[ContextItem]:
+        """使用LLM对上下文进行重新排序"""
+        if len(context_items) <= top_k:
+            return context_items
+        
+        # 构建rerank prompt
+        prompt = self._build_rerank_prompt(query, context_items)
+        response = self.chatbot.chat(prompt)
+        
+        # 解析rerank结果
+        ranked_indices = self._parse_rerank_response(response)
+        
+        # 返回重排序的结果
+        return [context_items[i] for i in ranked_indices[:top_k]]
+```
+
+#### 9.2.5 主协调器
+
+```python
+class MultiSourceContextBuilder:
+    def build_context(self, query: str, intent_analysis: Dict) -> List[ContextItem]:
+        all_items = []
+        
+        # 并行检索 (KISS - 简单直接)
+        for source_type, retriever in self.retrievers.items():
+            if self.config.get(f"enable_{source_type}", True):
+                top_k = self.config.get("top_k_per_source", 5)
+                items = retriever.retrieve(query, intent_analysis, top_k)
+                all_items.extend(items)
+        
+        # 统一rerank
+        final_top_k = self.config.get("final_top_k", 5)
+        return self.reranker.rerank(query, all_items, final_top_k)
+```
+
+### 9.3 工作流程
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant QA as 问答服务
+    participant IA as 意图分析器
+    participant VR as Vector检索器
+    participant CR as CallGraph检索器
+    participant DR as Dependency检索器
+    participant RK as LLM Reranker
+    participant LLM as QA LLM
+    
+    User->>QA: 提问
+    QA->>IA: 分析意图
+    IA-->>QA: 返回意图分析
+    
+    par 并行检索
+        QA->>VR: 向量检索(top-5)
+        QA->>CR: 调用图检索(top-5)
+        QA->>DR: 依赖图检索(top-5)
+    end
+    
+    VR-->>QA: 返回向量上下文
+    CR-->>QA: 返回调用关系
+    DR-->>QA: 返回依赖关系
+    
+    QA->>RK: 重排序所有上下文
+    RK-->>QA: 返回top-5最佳上下文
+    
+    QA->>LLM: 生成回答
+    LLM-->>QA: 返回回答
+    QA-->>User: 最终回答
+```
+
+### 9.4 配置系统
+
+```yaml
+# 增强查询配置
+enhanced_query:
+  enable: true
+  
+  # 检索源配置
+  sources:
+    vector:
+      enable: true
+      top_k: 5
+    call_graph:
+      enable: true
+      top_k: 5
+      max_depth: 3
+    dependency:
+      enable: true
+      top_k: 5
+      include_circular: true
+  
+  # Rerank配置
+  rerank:
+    enable: true
+    final_top_k: 5
+    model: "gemini-2.0-flash"
+    prompt_template: "default"
+  
+  # 性能配置
+  performance:
+    parallel_retrieval: true
+    cache_enabled: true
+    timeout_seconds: 30
+```
+
+### 9.5 预期效果
+
+1. **查询价值提升**: 从简单代码片段到多维度上下文分析
+2. **图数据利用**: 充分利用27M+关系数据
+3. **智能排序**: LLM rerank确保最相关信息优先
+4. **架构简洁**: 符合KISS原则，易于维护和扩展
+
+### 9.6 性能指标
+
+| 指标 | 目标值 | 说明 |
+|------|--------|------|
+| 检索响应时间 | < 3秒 | 并行检索优化 |
+| Rerank时间 | < 2秒 | LLM调用优化 |
+| 总响应时间 | < 8秒 | 端到端性能 |
+| 上下文质量 | > 85% | 用户满意度 |
+
+## 10. POC成功标准
+
+### 10.1 技术验证目标
 
 1. **端到端工作流验证**
    - 解析简单C文件 (hello.c) ✓
@@ -992,22 +1173,22 @@ gantt
    - 代码语义搜索
    - 基于上下文的智能问答
 
-### 9.2 性能基线 (POC阶段)
+### 10.2 性能基线 (POC阶段)
 
 - **单文件解析:** < 5秒 (100行C代码)
 - **向量生成:** < 10秒 (10个函数)
 - **问答响应:** < 15秒 (包含API调用)
 - **内存使用:** < 2GB (嵌入模型加载)
 
-### 9.3 质量标准 (简化)
+### 10.3 质量标准 (简化)
 
 - **测试覆盖率:** 60% (降低至POC标准)
 - **代码质量:** flake8 + mypy通过
 - **文档完整性:** 核心接口和使用说明
 
-## 10. 风险评估和缓解
+## 11. 风险评估和缓解
 
-### 10.1 Linux环境风险
+### 11.1 Linux环境风险
 
 | 风险项 | 概率 | 影响 | 缓解措施 |
 |--------|------|------|----------|
@@ -1015,7 +1196,7 @@ gantt
 | 模型下载失败 | 低 | 中 | 提供离线模型包，使用代理下载 |
 | 权限问题 | 中 | 中 | 使用用户目录，避免系统目录操作 |
 
-### 10.2 技术风险
+### 11.2 技术风险
 
 | 风险项 | 概率 | 影响 | 缓解措施 |
 |--------|------|------|----------|
@@ -1027,4 +1208,4 @@ gantt
 
 **文档版本:** v1.4  
 **最后更新:** 2025-06-19  
-**下一步:** 实现Story 2.3实用CLI工具
+**下一步:** 性能优化与代码质量分析

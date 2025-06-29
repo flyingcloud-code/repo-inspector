@@ -11,6 +11,12 @@ from ..core.interfaces import IEmbeddingEngine, IVectorStore, IGraphStore, IChat
 from ..llm.service_factory import ServiceFactory
 from ..utils.logger import get_logger
 from .intent_analyzer import IntentAnalyzer
+from ..retrieval.vector_retriever import VectorContextRetriever
+from ..retrieval.call_graph_retriever import CallGraphContextRetriever
+from ..retrieval.dependency_retriever import DependencyContextRetriever
+from ..retrieval.multi_source_builder import MultiSourceContextBuilder
+from ..rerank.llm_reranker import LLMReranker
+from ..core.context_models import IntentAnalysis, RetrievalConfig
 
 logger = get_logger(__name__)
 
@@ -108,7 +114,7 @@ class CodeQAService:
             return f"抱歉，在处理您的问题时遇到了错误: {str(e)}"
     
     def _build_enhanced_code_context(self, question: str, context: Optional[dict], 
-                                   intent_analysis: Dict[str, Any]) -> str:
+                                     intent_analysis: Dict[str, Any]) -> str:
         """构建增强的代码上下文
         
         Args:
@@ -132,23 +138,122 @@ class CodeQAService:
             if file_context:
                 code_context += f"## 指定文件信息\n{file_context}\n\n"
         
-        # 2. 使用改进的向量检索
-        vector_context = self._get_enhanced_vector_context(question, intent_analysis)
-        if vector_context:
-            code_context += f"## 相关代码片段\n{vector_context}\n\n"
+        # 2. 使用多源检索系统获取上下文
+        try:
+            logger.info("使用多源检索系统获取上下文...")
+            
+            # 确保所有服务已初始化
+            self._ensure_services_initialized()
+            
+            # 创建检索器
+            vector_retriever = VectorContextRetriever(
+                vector_store=self.vector_store,
+                embedding_engine=self.embedding_engine
+            )
+            
+            call_graph_retriever = CallGraphContextRetriever(
+                graph_store=self.graph_store
+            )
+            
+            dependency_retriever = DependencyContextRetriever(
+                graph_store=self.graph_store
+            )
+            
+            # 创建重排序器
+            reranker = LLMReranker(
+                chatbot=self.chatbot
+            )
+            
+            # 创建多源构建器
+            builder = MultiSourceContextBuilder(
+                vector_retriever=vector_retriever,
+                call_graph_retriever=call_graph_retriever,
+                dependency_retriever=dependency_retriever,
+                reranker=reranker,
+                intent_analyzer=self.intent_analyzer
+            )
+            
+            # 转换意图分析格式
+            intent = IntentAnalysis(
+                entities=intent_analysis.get("functions", []) + intent_analysis.get("files", []),
+                intent_type=intent_analysis.get("intent_type", "general_question"),
+                keywords=intent_analysis.get("keywords", []) + intent_analysis.get("search_terms", []),
+                confidence=0.8
+            )
+            
+            # 获取多源上下文
+            retrieval_config = RetrievalConfig(
+                final_top_k=5,
+                sources={
+                    "vector": {"top_k": 5, "enable": True},
+                    "call_graph": {"top_k": 5, "enable": True},
+                    "dependency": {"top_k": 5, "enable": True}
+                }
+            )
+            
+            # 根据意图类型调整配置
+            if intent.intent_type == "function_analysis":
+                retrieval_config.sources["call_graph"]["top_k"] = 8
+            elif intent.intent_type == "call_relationship":
+                retrieval_config.sources["call_graph"]["top_k"] = 10
+                retrieval_config.sources["vector"]["top_k"] = 3
+            elif intent.intent_type == "file_analysis":
+                retrieval_config.sources["dependency"]["top_k"] = 8
+            
+            # 执行多源检索
+            context_items = builder.build_context(question, intent, retrieval_config)
+            
+            # 将结果格式化为字符串
+            if context_items:
+                code_context += "## 多源检索结果\n\n"
+                
+                for i, item in enumerate(context_items):
+                    # 添加来源标识
+                    source_tag = f"[{item.source_type}]" if item.source_type else ""
+                    
+                    # 添加元数据信息
+                    meta_info = []
+                    if item.metadata:
+                        if "file_path" in item.metadata:
+                            meta_info.append(f"文件: {item.metadata['file_path']}")
+                        if "function_name" in item.metadata:
+                            meta_info.append(f"函数: {item.metadata['function_name']}")
+                        if "start_line" in item.metadata and "end_line" in item.metadata:
+                            meta_info.append(f"行: {item.metadata['start_line']}-{item.metadata['end_line']}")
+                    
+                    meta_str = f" ({', '.join(meta_info)})" if meta_info else ""
+                    
+                    # 添加内容
+                    code_context += f"### 片段 {i+1} {source_tag}{meta_str}\n```\n{item.content}\n```\n\n"
+                
+                logger.info(f"多源检索成功，获取到 {len(context_items)} 个上下文片段")
+            else:
+                logger.warning("多源检索未返回结果")
+                
+                # 回退到传统向量检索
+                vector_context = self._get_enhanced_vector_context(question, intent_analysis)
+                if vector_context:
+                    code_context += vector_context
+                
+        except Exception as e:
+            logger.error(f"多源检索失败: {e}", exc_info=True)
+            
+            # 回退到传统向量检索
+            vector_context = self._get_enhanced_vector_context(question, intent_analysis)
+            if vector_context:
+                code_context += vector_context
+            
+            # 回退到Neo4j检索
+            neo4j_context = self._get_neo4j_context_from_intent(intent_analysis)
+            if neo4j_context:
+                code_context += neo4j_context
         
-        # 3. 从Neo4j获取意图分析识别的函数
-        neo4j_context = self._get_neo4j_context_from_intent(intent_analysis)
-        if neo4j_context:
-            code_context += f"## 相关函数详情\n{neo4j_context}\n\n"
+        # 如果没有获取到任何上下文，添加一个提示
+        if not code_context.strip():
+            code_context = "未找到相关代码上下文。请尝试提供更具体的问题或指定函数/文件名。"
+            logger.warning("未找到相关代码上下文")
         
-        # 4. 如果是调用关系问题，获取调用图信息
-        if intent_analysis.get("intent_type") == "call_relationship":
-            call_context = self._get_call_relationship_context(intent_analysis.get("functions", []))
-            if call_context:
-                code_context += f"## 函数调用关系\n{call_context}\n\n"
-        
-        return code_context.strip()
+        return code_context
     
     def _get_enhanced_vector_context(self, question: str, intent_analysis: Dict[str, Any], top_k: int = 5) -> str:
         """获取增强的向量上下文
@@ -195,8 +300,8 @@ class CodeQAService:
                 results = self.vector_store.query_embeddings(
                     query_vector=query_vector,
                     n_results=top_k // len(search_queries) + 1,
-                    collection_name="code_embeddings"
-                )
+                collection_name="code_embeddings"
+            )
                 
                 all_results.extend(results)
             

@@ -1,0 +1,134 @@
+# C语言智能代码分析调试工具配置文件
+# 版本: v2.0 (支持多源检索+Rerank)
+
+# 应用配置
+app:
+  name: "Code Repo Learner"
+  version: "2.0.0"
+  debug: true
+  log_level: "INFO"
+  data_dir: "./data"
+
+# Neo4j图数据库配置 (Docker容器)
+neo4j:
+  uri: "bolt://localhost:7687"
+  user: "neo4j"
+  database: "neo4j"
+
+# Chroma向量数据库配置
+chroma:
+  persist_directory: "./data/chroma_db"
+  collection_name: "code_embeddings"
+
+# SQLite数据库配置
+sqlite:
+  database_path: "./data/metadata.db"
+
+# 嵌入模型配置
+embedding:
+  model_name: "jinaai/jina-embeddings-v2-base-code"
+  cache_dir: "~/.cache/torch/sentence_transformers/"
+  device: "cpu"
+
+# 日志配置
+logging:
+  level: "INFO"
+  file: "./logs/code_learner.log"
+  max_size: "10MB"
+  backup_count: 5
+
+# OpenRouter配置
+openrouter:
+  api_key: ""  # 从环境变量读取
+  base_url: "https://openrouter.ai/api/v1/chat/completions"
+  model: "google/gemini-2.0-flash-001"
+  max_tokens: 8192
+  temperature: 1.0
+  top_p: 0.95
+
+# 增强查询配置
+enhanced_query:
+  enabled: true
+  final_top_k: 5
+  rerank_enabled: true
+  sources:
+    vector:
+      enabled: true
+      top_k: 5
+    call_graph:
+      enabled: true
+      top_k: 5
+    dependency:
+      enabled: true
+      top_k: 5
+
+# 意图分析配置
+intent_analysis:
+  enable: true
+  model: "gemini-2.0-flash"
+  confidence_threshold: 0.7
+  entity_extraction:
+    function_patterns:
+      - "\\b[a-zA-Z_][a-zA-Z0-9_]*\\s*\\("
+      - "\\bfunction\\s+([a-zA-Z_][a-zA-Z0-9_]*)"
+    file_patterns:
+      - "\\b[a-zA-Z0-9_/.-]+\\.(c|h)\\b"
+      - "\\bfile\\s+([a-zA-Z0-9_/.-]+)"
+
+# 代码问答服务配置
+code_qa:
+  context_window: 8192
+  max_context_items: 10
+  response_format: "detailed"
+  include_source_info: true
+  
+  # 回答质量控制
+  quality_control:
+    min_context_relevance: 0.3
+    max_response_length: 4096
+    include_code_examples: true
+    include_explanations: true
+
+# 缓存配置
+cache:
+  enable: true
+  type: "memory"  # memory, redis, file
+  ttl: 3600  # 秒
+  max_size: 1000  # 最大缓存项数
+  
+  # Redis配置 (如果使用Redis缓存)
+  redis:
+    host: "localhost"
+    port: 6379
+    db: 0
+    password: ""
+
+# 监控和指标配置
+monitoring:
+  enable: true
+  collect_performance_metrics: true
+  collect_usage_statistics: true
+  
+  # 指标收集间隔
+  metrics_interval: 60  # 秒
+  
+  # 性能阈值告警
+  thresholds:
+    retrieval_time_warning: 5.0  # 秒
+    rerank_time_warning: 3.0     # 秒
+    total_response_time_warning: 10.0  # 秒
+    memory_usage_warning: 2048   # MB
+
+# 开发和调试配置
+development:
+  enable_debug_logging: true
+  save_debug_contexts: true
+  debug_output_dir: "./debug"
+  
+  # 测试配置
+  test_mode: false
+  mock_llm_responses: false
+  
+  # 性能分析
+  enable_profiling: false
+  profile_output_dir: "./profiles" 

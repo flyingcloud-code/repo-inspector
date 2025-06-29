@@ -525,107 +525,263 @@ class InteractiveQuerySession:
 def check_system_status(verbose: bool = False) -> Dict[str, Any]:
     """检查系统状态
     
+    检查Neo4j、Chroma、LLM服务等组件的状态
+    
     Args:
         verbose: 是否显示详细信息
         
     Returns:
         Dict[str, Any]: 状态信息
     """
+    print("检查系统状态...")
+    
+    # 确保.env文件被加载
+    from dotenv import load_dotenv, find_dotenv
+    load_dotenv(find_dotenv())
+    import os
+    
     status = {
-        "database": {"status": "unknown"},
-        "embedding_model": {"status": "unknown"},
-        "llm_api": {"status": "unknown"},
-        "overall": "unknown"
+        "neo4j": {"status": "unknown"},
+        "chroma": {"status": "unknown"},
+        "llm": {"status": "unknown"}
     }
     
-    # 检查数据库连接
+    # 检查Neo4j连接
     try:
-        graph_store = Neo4jGraphStore()
-        config = ConfigManager().get_config()
+        print("检查Neo4j连接...")
+        graph_store = ServiceFactory.get_graph_store()
+        node_count = graph_store.count_nodes()
+        rel_count = graph_store.count_relationships()
         
-        db_connected = graph_store.connect(
-            config.database.neo4j_uri,
-            config.database.neo4j_user,
-            config.database.neo4j_password
-        )
-        
-        if db_connected:
-            status["database"] = {
-                "status": "healthy",
-                "uri": config.database.neo4j_uri,
-                "details": graph_store.health_check() if verbose else {}
-            }
-        else:
-            status["database"] = {
-                "status": "unhealthy",
-                "uri": config.database.neo4j_uri,
-                "error": "Failed to connect to database"
-            }
-            
-    except Exception as e:
-        status["database"] = {
-            "status": "error",
-            "error": str(e)
+        status["neo4j"] = {
+            "status": "healthy" if node_count > 0 else "warning",
+            "nodes": node_count,
+            "relationships": rel_count,
+            "uri": graph_store.uri
         }
+        
+        if verbose:
+            # 获取更详细的Neo4j信息
+            print("获取Neo4j详细信息...")
+            node_types = graph_store.get_node_types()
+            rel_types = graph_store.get_relationship_types()
+            
+            status["neo4j"]["node_types"] = node_types
+            status["neo4j"]["relationship_types"] = rel_types
+            
+            # 获取函数和文件统计
+            function_count = graph_store.count_nodes_by_label("Function")
+            file_count = graph_store.count_nodes_by_label("File")
+            
+            status["neo4j"]["function_count"] = function_count
+            status["neo4j"]["file_count"] = file_count
+        
+        print(f"Neo4j状态: {'✅' if status['neo4j']['status'] == 'healthy' else '⚠️'}")
+        print(f"  - 节点数: {node_count:,}")
+        print(f"  - 关系数: {rel_count:,}")
+        
+    except Exception as e:
+        status["neo4j"] = {"status": "error", "message": str(e)}
+        print(f"Neo4j连接错误: {e}")
+    
+    # 检查Chroma向量数据库
+    try:
+        print("检查Chroma向量数据库...")
+        factory = ServiceFactory()
+        vector_store = factory.get_vector_store()
+        
+        collections = vector_store.list_collections()
+        collection_details = {}
+        total_chunks = 0
+        
+        for collection_name in collections:
+            try:
+                count = vector_store.count_documents(collection_name)
+                collection_details[collection_name] = count
+                total_chunks += count
+            except Exception:
+                collection_details[collection_name] = "error"
+        
+        status["chroma"] = {
+            "status": "healthy" if collections else "warning",
+            "collections": len(collections),
+            "collection_names": collections,
+            "total_chunks": total_chunks
+        }
+        
+        if verbose:
+            # 获取更详细的集合信息
+            print("获取Chroma详细信息...")
+            status["chroma"]["collection_details"] = collection_details
+            
+            # 获取一个示例chunk的metadata
+            if collections and total_chunks > 0:
+                try:
+                    sample_collection = collections[0]
+                    sample_results = vector_store.query_embeddings(
+                        query_vector=[0.0] * 768,  # 假设向量维度为768
+                        n_results=1,
+                        collection_name=sample_collection
+                    )
+                    if sample_results:
+                        status["chroma"]["sample_metadata"] = sample_results[0].get("metadata", {})
+                except Exception as e:
+                    status["chroma"]["sample_error"] = str(e)
+        
+        print(f"Chroma状态: {'✅' if status['chroma']['status'] == 'healthy' else '⚠️'}")
+        print(f"  - 集合数: {len(collections)}")
+        print(f"  - 总chunks数: {total_chunks:,}")
+        
+    except Exception as e:
+        status["chroma"] = {"status": "error", "message": str(e)}
+        print(f"Chroma连接错误: {e}")
     
     # 检查嵌入模型
     try:
+        print("检查嵌入模型...")
         embedding_engine = ServiceFactory.get_embedding_engine()
-        test_result = embedding_engine.encode_text("Test embedding")
-        
-        if test_result is not None and len(test_result) > 0:
-            status["embedding_model"] = {
-                "status": "healthy",
-                "model": config.llm.embedding_model_name,
-                "dimensions": len(test_result),
-                "details": {"cache_path": embedding_engine.get_cache_path()} if verbose else {}
-            }
-        else:
-            status["embedding_model"] = {
-                "status": "unhealthy",
-                "model": config.llm.embedding_model_name,
-                "error": "Failed to generate embeddings"
-            }
-            
-    except Exception as e:
-        status["embedding_model"] = {
-            "status": "error",
-            "error": str(e)
+        model_info = {
+            "name": embedding_engine.model_name,
+            "dimensions": embedding_engine.get_dimensions(),
+            "device": embedding_engine.device
         }
+        
+        status["embedding"] = {
+            "status": "healthy" if embedding_engine.model else "error",
+            "model": model_info
+        }
+        
+        print(f"嵌入模型状态: {'✅' if status['embedding']['status'] == 'healthy' else '⚠️'}")
+        print(f"  - 模型: {model_info['name']}")
+        print(f"  - 维度: {model_info['dimensions']}")
+        
+    except Exception as e:
+        status["embedding"] = {"status": "error", "message": str(e)}
+        print(f"嵌入模型错误: {e}")
     
-    # 检查LLM API
+    # 检查LLM服务
     try:
-        chatbot = ServiceFactory.get_chatbot()
-        test_response = chatbot.ask_question("Hello, are you working?", [])
-        
-        if test_response and test_response.content:
-            status["llm_api"] = {
-                "status": "healthy",
-                "model": config.llm.chat_model,
-                "details": {"response_time": chatbot.last_response_time} if verbose else {}
+        print("检查LLM服务...")
+        # 直接检查环境变量
+        api_key = os.getenv('OPENROUTER_API_KEY')
+        if not api_key:
+            print("❌ OPENROUTER_API_KEY未设置或为空")
+            status["llm"] = {
+                "status": "error",
+                "message": "OPENROUTER_API_KEY未设置"
             }
         else:
-            status["llm_api"] = {
-                "status": "unhealthy",
-                "model": config.llm.chat_model,
-                "error": "Empty response from API"
+            chatbot = ServiceFactory.get_chatbot()
+            model_info = {
+                "model": chatbot.model_name,
+                "max_tokens": chatbot.max_tokens
             }
             
+            # 只检查配置，不实际调用API
+            status["llm"] = {
+                "status": "configured",
+                "model": model_info,
+                "api_key": api_key[:5] + "..." + api_key[-5:] if len(api_key) > 10 else "***"
+            }
+            
+            print(f"LLM服务状态: ✅")
+            print(f"  - 模型: {model_info['model']}")
+            print(f"  - API密钥: {len(api_key) if len(api_key) > 10 else '***'}")
+        
     except Exception as e:
-        status["llm_api"] = {
-            "status": "error",
-            "error": str(e)
-        }
+        status["llm"] = {"status": "error", "message": str(e)}
+        print(f"LLM服务错误: {e}")
     
-    # 计算整体状态
-    if all(component["status"] == "healthy" for component in [status["database"], status["embedding_model"], status["llm_api"]]):
-        status["overall"] = "healthy"
-    elif any(component["status"] == "error" for component in [status["database"], status["embedding_model"], status["llm_api"]]):
-        status["overall"] = "error"
-    else:
-        status["overall"] = "degraded"
+    # 检查多源检索系统状态
+    try:
+        print("检查多源检索系统...")
+        
+        # 检查配置
+        config = ConfigManager().get_config()
+        enhanced_query_enabled = config.enhanced_query.enabled
+        
+        retrieval_sources = []
+        if config.enhanced_query.sources["vector"]["enabled"]:
+            retrieval_sources.append("vector")
+        if config.enhanced_query.sources["call_graph"]["enabled"]:
+            retrieval_sources.append("call_graph")
+        if config.enhanced_query.sources["dependency"]["enabled"]:
+            retrieval_sources.append("dependency")
+        
+        status["enhanced_query"] = {
+            "status": "enabled" if enhanced_query_enabled else "disabled",
+            "sources": retrieval_sources,
+            "rerank_enabled": config.enhanced_query.rerank_enabled,
+            "final_top_k": config.enhanced_query.final_top_k
+        }
+        
+        print(f"多源检索系统: {'✅' if enhanced_query_enabled else '⚠️'}")
+        print(f"  - 启用的源: {', '.join(retrieval_sources)}")
+        print(f"  - Rerank: {'启用' if config.enhanced_query.rerank_enabled else '禁用'}")
+        
+    except Exception as e:
+        status["enhanced_query"] = {"status": "error", "message": str(e)}
+        print(f"多源检索系统错误: {e}")
+    
+    # 总体状态
+    all_healthy = all(
+        component["status"] in ["healthy", "configured"] 
+        for component in [status["neo4j"], status["chroma"], status["embedding"], status["llm"]]
+    )
+    
+    status["overall"] = "healthy" if all_healthy else "warning"
+    
+    print()
+    print(f"系统总体状态: {'✅ 健康' if all_healthy else '⚠️ 警告'}")
     
     return status
+
+
+def analyze_code(project_path: str, output_dir: str = None, incremental: bool = False,
+               include_pattern: str = None, exclude_pattern: str = None,
+               threads: int = None, verbose: bool = False) -> Dict[str, Any]:
+    """分析代码
+    
+    封装代码分析功能，方便其他模块调用
+    
+    Args:
+        project_path: 项目路径
+        output_dir: 输出目录
+        incremental: 是否进行增量分析
+        include_pattern: 包含的文件模式
+        exclude_pattern: 排除的文件模式
+        threads: 并行处理线程数
+        verbose: 是否显示详细日志
+        
+    Returns:
+        Dict[str, Any]: 分析结果统计
+    """
+    # 设置日志级别
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+    
+    # 转换路径
+    project_path = Path(project_path)
+    if not project_path.exists() or not project_path.is_dir():
+        raise ValueError(f"项目路径不存在: {project_path}")
+    
+    output_dir = Path(output_dir) if output_dir else None
+    
+    # 创建分析器
+    analyzer = CodeAnalyzer(
+        project_path=project_path,
+        output_dir=output_dir,
+        include_pattern=include_pattern,
+        exclude_pattern=exclude_pattern,
+        threads=threads or 4
+    )
+    
+    # 执行分析
+    stats = analyzer.analyze(incremental=incremental, generate_embeddings=True)
+    
+    return stats
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -766,9 +922,40 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print(f"{status_emoji} {component}: {status_str}")
                     
                     if args.verbose:
-                        for key, value in info.items():
-                            if key != "status" and key != "error":
-                                print(f"  - {key}: {value}")
+                        # 特殊处理不同组件的详细信息
+                        if component == "vector_database" and "details" in info:
+                            details = info["details"]
+                            print(f"  - collections: {info.get('collections', 0)}")
+                            print(f"  - total_chunks: {info.get('total_chunks', 0)}")
+                            
+                            if "chunk_distribution" in details:
+                                print("  - chunk_distribution:")
+                                for project_id, project_info in details["chunk_distribution"].items():
+                                    print(f"    * project_{project_id}: {project_info['total_chunks']} chunks in {project_info['collections']} collections")
+                            
+                            if "collection_names" in details:
+                                print(f"  - active_collections: {', '.join(details['collection_names'][:3])}{'...' if len(details['collection_names']) > 3 else ''}")
+                        
+                        elif component == "database" and "details" in info:
+                            details = info["details"]
+                            if details:
+                                for key, value in details.items():
+                                    if isinstance(value, dict):
+                                        print(f"  - {key}:")
+                                        for sub_key, sub_value in value.items():
+                                            print(f"    * {sub_key}: {sub_value}")
+                                    else:
+                                        print(f"  - {key}: {value}")
+                        
+                        else:
+                            # 默认处理其他组件
+                            for key, value in info.items():
+                                if key not in ["status", "error", "details"]:
+                                    print(f"  - {key}: {value}")
+                            
+                            if "details" in info and info["details"]:
+                                for detail_key, detail_value in info["details"].items():
+                                    print(f"  - {detail_key}: {detail_value}")
                     
                     if "error" in info:
                         print(f"  错误: {info['error']}")

@@ -15,7 +15,7 @@ from .chatbot import OpenRouterChatBot
 from ..config.config_manager import ConfigManager
 from ..core.exceptions import ConfigurationError
 from ..utils.logger import get_logger
-from ..core.interfaces import IParser, IGraphStore, IEmbeddingEngine, IChatBot, ICallGraphService, IDependencyService
+from ..core.interfaces import IParser, IGraphStore, IEmbeddingEngine, IChatBot, ICallGraphService, IDependencyService, IVectorStore
 from ..parser.c_parser import CParser
 from ..storage.neo4j_store import Neo4jGraphStore
 from .call_graph_service import CallGraphService
@@ -27,9 +27,15 @@ logger = logging.getLogger(__name__)
 class ServiceFactory:
     """服务工厂类 - 单例模式
     
-    负责创建和管理所有服务实例，包括LLM相关服务
+    负责创建和管理所有服务实例，包括LLM、向量存储、图存储等
     """
-    _services: Dict[str, Any] = {}
+    
+    # 类级别的服务缓存
+    _services = {}
+    _embedding_engine = None
+    _graph_store = None
+    _chatbot = None
+    _vector_store = None
 
     @classmethod
     def get_embedding_engine(cls) -> IEmbeddingEngine:
@@ -82,6 +88,9 @@ class ServiceFactory:
             # 创建Neo4j存储实例
             store = Neo4jGraphStore(project_id=project_id)
             
+            # 纯查询场景可跳过schema init，提高速度
+            os.environ.setdefault("SKIP_NEO4J_SCHEMA_INIT", "true")
+            
             # 使用配置中的连接参数进行连接
             success = store.connect(
                 config.database.neo4j_uri,
@@ -111,6 +120,23 @@ class ServiceFactory:
             graph_store = cls.get_graph_store()
             cls._services["dependency_service"] = DependencyService(parser, graph_store)
         return cls._services["dependency_service"]
+
+    @classmethod
+    def get_vector_store(cls, project_id: Optional[str] = None) -> IVectorStore:
+        """获取向量存储实例（单例模式）
+        
+        Args:
+            project_id: 项目ID，用于隔离不同项目的数据
+            
+        Returns:
+            IVectorStore: 向量存储实例
+        """
+        if not cls._vector_store:
+            logger.info("创建向量存储实例...")
+            factory = cls()
+            cls._vector_store = factory.create_vector_store(project_id=project_id)
+            
+        return cls._vector_store
     
     @classmethod
     def get_code_qa_service(cls):
@@ -126,21 +152,15 @@ class ServiceFactory:
         cls._services.clear()
         logger.info("所有服务实例已重置")
 
-    def create_vector_store(self, project_id: str = None) -> ChromaVectorStore:
-        """创建向量存储
+    def create_vector_store(self, project_id: Optional[str] = None) -> IVectorStore:
+        """创建向量存储实例
         
         Args:
-            project_id: 项目ID，用于项目隔离
+            project_id: 项目ID，用于隔离不同项目的数据
             
         Returns:
-            ChromaVectorStore: 向量存储实例
+            IVectorStore: 向量存储实例
         """
-        # 如果有项目ID，使用带项目ID的键来缓存不同的实例
-        cache_key = f"vector_store_{project_id}" if project_id else "vector_store"
-        
-        if cache_key in self._services:
-            return self._services[cache_key]
-        
         try:
             logger.info("🏭 创建向量存储服务")
             
@@ -151,6 +171,9 @@ class ServiceFactory:
                 "collection_name": config.vector_store.chroma_collection_name
             }
             
+            # 导入存储实现
+            from ..storage.chroma_store import ChromaVectorStore
+            
             # 创建向量存储，传入项目ID
             store = ChromaVectorStore(
                 persist_directory=vector_config.get("persist_directory", "./data/chroma"),
@@ -160,9 +183,6 @@ class ServiceFactory:
             # 创建默认集合（会自动使用项目ID前缀）
             collection_name = vector_config.get("collection_name", "code_embeddings")
             store.create_collection(collection_name)
-            
-            # 缓存服务实例
-            self._services[cache_key] = store
             
             logger.info(f"✅ 向量存储创建成功: {store.get_collection_name(collection_name)}")
             return store
@@ -208,59 +228,78 @@ class ServiceFactory:
         elif service_name == "chatbot":
             return self.get_chatbot()
         else:
-            raise ValueError(f"Unknown service name: {service_name}")
+            raise ValueError(f"Unknown service: {service_name}")
     
     def reset_services(self) -> None:
-        """重置所有服务实例
-        
-        用于测试或重新配置
-        """
-        logger.info("🔄 重置所有LLM服务")
+        """重置所有服务实例"""
+        for service_name in list(self._services.keys()):
+            if hasattr(self._services[service_name], 'close'):
+                try:
+                    self._services[service_name].close()
+                except Exception as e:
+                    logger.warning(f"Error closing service {service_name}: {e}")
         self._services.clear()
-        logger.info("✅ 服务重置完成")
+        logger.info("所有服务实例已重置")
     
     def get_services_status(self) -> Dict[str, Dict[str, Any]]:
-        """获取所有服务状态
+        """获取所有服务的状态
         
         Returns:
-            Dict: 服务状态信息
+            Dict[str, Dict[str, Any]]: 服务状态字典
         """
         status = {}
         
-        for service_name in ["embedding_engine", "vector_store", "chatbot"]:
-            if service_name in self._services:
-                service = self._services[service_name]
-                
-                if hasattr(service, 'get_model_info'):
-                    status[service_name] = service.get_model_info()
-                elif hasattr(service, 'list_collections'):
-                    status[service_name] = {
-                        "collections": service.list_collections(),
-                        "status": "active"
-                    }
-                else:
-                    status[service_name] = {"status": "active"}
-            else:
-                status[service_name] = {"status": "not_created"}
+        # 检查Neo4j连接
+        try:
+            graph_store = self.get_graph_store()
+            node_count = graph_store.count_nodes()
+            rel_count = graph_store.count_relationships()
+            status["neo4j"] = {
+                "status": "healthy" if node_count > 0 else "warning",
+                "nodes": node_count,
+                "relationships": rel_count
+            }
+        except Exception as e:
+            status["neo4j"] = {"status": "error", "message": str(e)}
+        
+        # 检查向量存储
+        try:
+            vector_store = self.create_vector_store()
+            collections = vector_store.list_collections()
+            status["vector_store"] = {
+                "status": "healthy",
+                "collections": len(collections),
+                "collection_names": collections
+            }
+        except Exception as e:
+            status["vector_store"] = {"status": "error", "message": str(e)}
         
         return status
-
-    # ------------------------------------------------------------------
-    # 兼容 CodeQAService 中的 create_* 命名
-    # ------------------------------------------------------------------
+    
     def create_embedding_engine(self) -> IEmbeddingEngine:  # alias
+        """创建嵌入引擎实例"""
         return self.get_embedding_engine()
-
+    
     def create_chatbot(self) -> IChatBot:
+        """创建聊天机器人实例"""
         return self.get_chatbot()
-
-    # 提供通用 create_service 接口
+    
     def create_service(self, name: str):
+        """创建指定服务实例
+        
+        Args:
+            name: 服务名称
+            
+        Returns:
+            服务实例
+        """
         if name == "embedding_engine":
-            return self.get_embedding_engine()
-        elif name == "chatbot":
-            return self.get_chatbot()
+            return self.create_embedding_engine()
         elif name == "vector_store":
             return self.create_vector_store()
+        elif name == "chatbot":
+            return self.create_chatbot()
+        elif name == "code_qa":
+            return self.get_code_qa_service()
         else:
-            raise ValueError(f"Unknown service name: {name}") 
+            raise ValueError(f"Unknown service: {name}") 

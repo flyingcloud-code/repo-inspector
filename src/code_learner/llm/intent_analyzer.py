@@ -11,6 +11,7 @@ import json
 from typing import List, Dict, Any, Optional, Tuple
 from ..core.interfaces import IChatBot
 from ..utils.logger import get_logger
+from ..core.context_models import IntentAnalysis, IntentType
 
 logger = get_logger(__name__)
 
@@ -29,6 +30,55 @@ class IntentAnalyzer:
         """
         self.chatbot = chatbot
         logger.info("意图分析器初始化完成")
+    
+    def analyze(self, query: str) -> "IntentAnalysis":
+        """分析用户查询的意图，实现IIntentAnalyzer接口
+        
+        Args:
+            query: 用户查询字符串
+            
+        Returns:
+            IntentAnalysis: 意图分析结果
+        """
+        # 调用现有的analyze_question方法获取原始分析结果
+        raw_result = self.analyze_question(query)
+        
+        # 转换为IntentAnalysis对象
+        entities = []
+        
+        # 处理函数实体
+        for func_name in raw_result.get("functions", []):
+            entities.append({"name": func_name, "type": "function"})
+            
+        # 处理文件实体
+        for file_name in raw_result.get("files", []):
+            entities.append({"name": file_name, "type": "file"})
+            
+        # 处理变量实体
+        for var_name in raw_result.get("variables", []):
+            entities.append({"name": var_name, "type": "variable"})
+        
+        # 映射意图类型
+        intent_type_map = {
+            "function_analysis": IntentType.FUNCTION_QUERY,
+            "file_analysis": IntentType.FILE_QUERY,
+            "call_relationship": IntentType.CALL_RELATIONSHIP,
+            "dependency_check": IntentType.DEPENDENCY_QUERY,
+            "general_question": IntentType.GENERAL_QUESTION
+        }
+        
+        intent_type = intent_type_map.get(
+            raw_result.get("intent_type", "general_question"), 
+            IntentType.GENERAL_QUESTION
+        )
+        
+        # 创建IntentAnalysis对象
+        return IntentAnalysis(
+            entities=entities,
+            intent_type=intent_type,
+            keywords=raw_result.get("keywords", []),
+            confidence=0.8  # 默认置信度
+        )
     
     def analyze_question(self, question: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """分析用户问题，提取相关信息

@@ -18,6 +18,32 @@
 
 ## 使用方法
 
+### 统一分析工具（推荐）
+
+```bash
+# 一键执行完整分析（代码分析、调用图和依赖分析）
+./bin/code-learner-all <项目路径>
+
+# 指定输出目录
+./bin/code-learner-all <项目路径> --output-dir <输出目录>
+
+# 过滤特定文件
+./bin/code-learner-all <项目路径> --include "*.c,*.h" --exclude "test/*"
+
+# 使用多线程加速
+./bin/code-learner-all <项目路径> --threads 8
+
+# 显示详细日志
+./bin/code-learner-all <项目路径> --verbose
+```
+
+统一分析工具会自动执行以下步骤：
+1. 代码分析：解析代码并存储到Neo4j和Chroma数据库
+2. 依赖分析：分析项目依赖关系并检测循环依赖
+3. 调用图分析：为主要函数生成调用图
+
+分析完成后，工具会显示项目ID，该ID可用于后续查询。所有分析结果将保存在指定的输出目录中。
+
 ### 代码分析
 
 ```bash
@@ -112,6 +138,11 @@ code-learner embed-code --strategy tree_sitter --dir <项目路径> --collection
   - [x] Tree-sitter分块策略（不依赖Neo4j）
   - [x] 固定大小分块策略
   - [x] Neo4j语义分块策略
+- [x] 统一命令行工具 (2025-06-29)
+  - [x] 一键执行代码分析、调用图和依赖分析
+  - [x] 自动显示项目ID
+  - [x] 简化用户操作流程
+  - [x] 分析结果统一保存
 
 ### 计划功能
 
@@ -137,6 +168,10 @@ code-learner embed-code --strategy tree_sitter --dir <项目路径> --collection
 5. **分块器**：
    - Tree-sitter分块器：基于语法树的语义分块
    - 固定大小分块器：基于字符数的简单分块
+6. **统一CLI**：
+   - 一键执行所有分析功能
+   - 项目隔离机制
+   - 结果可视化
 
 ## 贡献指南
 

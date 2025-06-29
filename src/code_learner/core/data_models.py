@@ -103,93 +103,75 @@ class Config:
     logging: LoggingConfig
     performance: PerformanceConfig
     app: AppConfig
+    enhanced_query: EnhancedQueryConfig
     
     @classmethod
-    def from_dict(cls, config_data: Dict[str, Any]) -> 'Config':
-        """从字典创建配置对象
+    def from_dict(cls, config_dict: Dict[str, Any]) -> "Config":
+        """从字典创建配置
         
         Args:
-            config_data: 配置数据字典
+            config_dict: 配置字典
             
         Returns:
             Config: 配置对象
         """
-        # 创建各个配置部分
-        db_data = config_data.get('database', {})
-        neo4j_data = db_data.get('neo4j', {})
-        sqlite_data = db_data.get('sqlite', {})
+        database_config = DatabaseConfig()
+        vector_store_config = VectorStoreConfig()
+        llm_config = LLMConfig()
+        parser_config = ParserConfig()
+        logging_config = LoggingConfig()
+        performance_config = PerformanceConfig()
+        app_config = AppConfig()
+        enhanced_query_config = EnhancedQueryConfig()
         
-        db_args = {}
-        if 'uri' in neo4j_data: db_args['neo4j_uri'] = neo4j_data['uri']
-        if 'user' in neo4j_data: db_args['neo4j_user'] = neo4j_data['user']
-        if 'password' in neo4j_data: db_args['neo4j_password'] = neo4j_data['password']
-        if 'database' in neo4j_data: db_args['neo4j_database'] = neo4j_data['database']
-        if 'path' in sqlite_data: db_args['sqlite_path'] = sqlite_data['path']
-        database_config = DatabaseConfig(**db_args)
-
-        vector_store_data = config_data.get('vector_store', {})
-        chroma_data = vector_store_data.get('chroma', {})
-        vector_store_config = VectorStoreConfig(
-            chroma_persist_directory=chroma_data.get('persist_directory'),
-            chroma_collection_name=chroma_data.get('collection_name')
-        )
+        # 解析数据库配置
+        if "database" in config_dict:
+            for key, value in config_dict["database"].items():
+                if hasattr(database_config, key):
+                    setattr(database_config, key, value)
         
-        llm_data = config_data.get('llm', {})
-        embedding_data = llm_data.get('embedding', {})
-        chat_data = llm_data.get('chat', {})
-        llm_config = LLMConfig(
-            embedding_model_name=embedding_data.get('model_name'),
-            embedding_cache_dir=embedding_data.get('cache_dir'),
-            embedding_batch_size=embedding_data.get('batch_size'),
-            chat_api_key=chat_data.get('api_key'),
-            chat_base_url=chat_data.get('base_url'),
-            chat_model=chat_data.get('model'),
-            chat_max_tokens=chat_data.get('max_tokens'),
-            chat_temperature=chat_data.get('temperature'),
-            chat_top_p=chat_data.get('top_p')
-        )
-
-        parser_data = config_data.get('parser', {})
-        tree_sitter_data = parser_data.get('tree_sitter', {})
-        file_patterns_data = parser_data.get('file_patterns', {})
-        options_data = parser_data.get('options', {})
-        parser_config = ParserConfig(
-            tree_sitter_language=tree_sitter_data.get('language'),
-            include_patterns=file_patterns_data.get('include'),
-            exclude_patterns=file_patterns_data.get('exclude'),
-            max_file_size=options_data.get('max_file_size'),
-            encoding=options_data.get('encoding')
-        )
-
-        logging_data = config_data.get('logging', {})
-        file_log_data = logging_data.get('file', {})
-        console_log_data = logging_data.get('console', {})
-        logging_config = LoggingConfig(
-            level=logging_data.get('level'),
-            format=logging_data.get('format'),
-            file_enabled=file_log_data.get('enabled'),
-            file_path=file_log_data.get('path'),
-            file_max_size=file_log_data.get('max_size'),
-            file_backup_count=file_log_data.get('backup_count'),
-            console_enabled=console_log_data.get('enabled'),
-            console_level=console_log_data.get('level')
-        )
+        # 解析向量存储配置
+        if "vector_store" in config_dict:
+            for key, value in config_dict["vector_store"].items():
+                if hasattr(vector_store_config, key):
+                    setattr(vector_store_config, key, value)
         
-        performance_data = config_data.get('performance', {})
-        cache_data = performance_data.get('cache', {})
-        batch_data = performance_data.get('batch', {})
-        performance_config = PerformanceConfig(
-            max_workers=performance_data.get('max_workers'),
-            cache_enabled=cache_data.get('enabled'),
-            cache_ttl=cache_data.get('ttl'),
-            cache_max_size=cache_data.get('max_size'),
-            embedding_batch_size=batch_data.get('embedding_batch_size'),
-            parsing_batch_size=batch_data.get('parsing_batch_size')
-        )
+        # 解析LLM配置
+        if "llm" in config_dict:
+            for key, value in config_dict["llm"].items():
+                if hasattr(llm_config, key):
+                    setattr(llm_config, key, value)
         
-        app_config = AppConfig(**config_data.get('app', {}))
-
-        # 创建完整配置对象
+        # 解析解析器配置
+        if "parser" in config_dict:
+            for key, value in config_dict["parser"].items():
+                if hasattr(parser_config, key):
+                    setattr(parser_config, key, value)
+        
+        # 解析日志配置
+        if "logging" in config_dict:
+            for key, value in config_dict["logging"].items():
+                if hasattr(logging_config, key):
+                    setattr(logging_config, key, value)
+        
+        # 解析性能配置
+        if "performance" in config_dict:
+            for key, value in config_dict["performance"].items():
+                if hasattr(performance_config, key):
+                    setattr(performance_config, key, value)
+        
+        # 解析应用配置
+        if "app" in config_dict:
+            for key, value in config_dict["app"].items():
+                if hasattr(app_config, key):
+                    setattr(app_config, key, value)
+        
+        # 解析增强查询配置
+        if "enhanced_query" in config_dict:
+            for key, value in config_dict["enhanced_query"].items():
+                if hasattr(enhanced_query_config, key):
+                    setattr(enhanced_query_config, key, value)
+        
         return cls(
             database=database_config,
             vector_store=vector_store_config,
@@ -197,7 +179,8 @@ class Config:
             parser=parser_config,
             logging=logging_config,
             performance=performance_config,
-            app=app_config
+            app=app_config,
+            enhanced_query=enhanced_query_config
         )
 
 
@@ -864,4 +847,108 @@ class ProjectDependencies:
             "circular_dependencies": self.circular_dependencies,
             "modularity_score": self.modularity_score,
             "stats": self.get_stats()
-        } 
+        }
+
+
+class EnhancedQueryConfig:
+    """增强查询配置
+    
+    包含多源检索系统的配置
+    """
+    def __init__(self):
+        self.enabled = True
+        self.sources = {
+            "vector": {
+                "enable": True,
+                "top_k": 5,
+                "min_relevance_score": 0.0
+            },
+            "call_graph": {
+                "enable": True,
+                "top_k": 5,
+                "min_relevance_score": 0.0
+            },
+            "dependency": {
+                "enable": True,
+                "top_k": 5,
+                "min_relevance_score": 0.0
+            }
+        }
+        self.final_top_k = 5
+        self.rerank_enabled = True
+        self.parallel_retrieval = True
+        self.timeout_seconds = 30
+        self.prompt_template = "default"  # rerank prompt 模板
+        
+    def to_dict(self) -> Dict[str, Any]:
+        """将配置转换为字典
+        
+        Returns:
+            Dict[str, Any]: 配置字典
+        """
+        return {
+            "enabled": self.enabled,
+            "sources": self.sources,
+            "final_top_k": self.final_top_k,
+            "rerank_enabled": self.rerank_enabled,
+            "parallel_retrieval": self.parallel_retrieval,
+            "timeout_seconds": self.timeout_seconds,
+            "prompt_template": self.prompt_template
+        }
+        
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> "EnhancedQueryConfig":
+        """从字典创建配置
+        
+        Args:
+            config_dict: 配置字典
+            
+        Returns:
+            EnhancedQueryConfig: 配置对象
+        """
+        config = cls()
+        
+        # 设置基本属性
+        if "enabled" in config_dict:
+            config.enabled = config_dict["enabled"]
+            
+        if "final_top_k" in config_dict:
+            config.final_top_k = config_dict["final_top_k"]
+            
+        if "rerank_enabled" in config_dict:
+            config.rerank_enabled = config_dict["rerank_enabled"]
+            
+        if "parallel_retrieval" in config_dict:
+            config.parallel_retrieval = config_dict["parallel_retrieval"]
+            
+        if "timeout_seconds" in config_dict:
+            config.timeout_seconds = config_dict["timeout_seconds"]
+        
+        # 设置源配置
+        if "sources" in config_dict:
+            # 合并源配置，保留默认值
+            for source_name, source_config in config_dict["sources"].items():
+                if source_name in config.sources:
+                    for key, value in source_config.items():
+                        config.sources[source_name][key] = value
+                else:
+                    # 添加新源
+                    config.sources[source_name] = source_config
+        
+        # 读取prompt_template
+        if "prompt_template" in config_dict:
+            config.prompt_template = config_dict["prompt_template"]
+        
+        return config
+
+
+class EmbeddingConfig:
+    """嵌入配置
+    
+    包含嵌入模型的配置
+    """
+    def __init__(self):
+        self.model_name = "jinaai/jina-embeddings-v2-base-code"
+        self.cache_dir = None
+        self.batch_size = 32
+        self.dimensions = 768 

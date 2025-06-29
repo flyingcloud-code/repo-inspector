@@ -36,6 +36,7 @@ class JinaEmbeddingEngine(IEmbeddingEngine):
         _default_cache = Path.home() / ".cache" / "torch" / "sentence_transformers"
         self.cache_dir = str(Path(cache_dir).expanduser()) if cache_dir else str(_default_cache)
         self.model_name: Optional[str] = None
+        self.device = "cpu"  # 默认使用CPU
         
     def load_model(self, model_name: str) -> bool:
         """加载嵌入模型
@@ -56,6 +57,10 @@ class JinaEmbeddingEngine(IEmbeddingEngine):
             )
             self.model_name = model_name
             
+            # 更新设备信息
+            if hasattr(self.model, 'device'):
+                self.device = str(self.model.device)
+            
             # 验证模型加载
             test_embedding = self.model.encode("test")
             embedding_dim = len(test_embedding)
@@ -63,6 +68,7 @@ class JinaEmbeddingEngine(IEmbeddingEngine):
             logger.info(f"✅ 模型加载成功: {model_name}")
             logger.info(f"📊 嵌入维度: {embedding_dim}")
             logger.info(f"💾 缓存目录: {self.cache_dir}")
+            logger.info(f"🖥️ 运行设备: {self.device}")
             
             return True
             
@@ -212,9 +218,48 @@ class JinaEmbeddingEngine(IEmbeddingEngine):
             "model_name": self.model_name,
             "embedding_dimension": len(test_embedding),
             "cache_dir": self.cache_dir,
-            "device": str(self.model.device) if hasattr(self.model, 'device') else "cpu"
+            "device": self.device
         }
 
     def get_cache_path(self) -> str:
         """获取模型缓存路径"""
         return self.cache_dir 
+
+    def get_dimensions(self) -> int:
+        """获取嵌入向量维度
+        
+        Returns:
+            int: 嵌入向量维度
+        """
+        if not self.model:
+            self._load_model()
+        
+        # 使用一个简单的文本获取维度
+        test_embedding = self.embed_text("test")
+        return len(test_embedding) 
+
+    def embed_text(self, text: str) -> List[float]:
+        """将文本转换为嵌入向量
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            List[float]: 嵌入向量
+        """
+        if not self.model:
+            self._load_model()
+        
+        try:
+            # 使用sentence-transformers进行嵌入
+            embedding = self.model.encode(text)
+            
+            # 转换为普通列表
+            if isinstance(embedding, np.ndarray):
+                embedding = embedding.tolist()
+            
+            return embedding
+            
+        except Exception as e:
+            logger.error(f"❌ 文本嵌入失败: {e}")
+            raise Exception(f"Failed to embed text: {str(e)}") 

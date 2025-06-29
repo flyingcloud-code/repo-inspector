@@ -49,6 +49,7 @@ call-graph = "code_learner.cli.call_graph_cli:main"
 dependency-graph = "code_learner.cli.dependency_cli:main"
 code-learner = "code_learner.cli.code_analyzer_cli:main"
 code-embed = "code_learner.commands.embed_code:main"
+code-learner-all = "code_learner.cli.unified_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/your-username/code-repo-learner"

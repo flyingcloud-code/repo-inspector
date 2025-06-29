@@ -1524,6 +1524,11 @@ class Neo4jGraphStore(IGraphStore):
 
     def _initialize_constraints(self):
         """初始化数据库约束和索引"""
+        # 允许通过环境变量跳过约束初始化，以加快纯查询场景
+        if os.getenv("SKIP_NEO4J_SCHEMA_INIT", "false").lower() in ("1", "true", "yes"):
+            logger.info("⏩ 跳过Neo4j约束初始化 (SKIP_NEO4J_SCHEMA_INIT=TRUE)")
+            return
+
         if not self.connected or not self.driver:
             logger.warning("数据库连接未初始化，无法创建约束")
             return
@@ -1838,3 +1843,380 @@ class Neo4jGraphStore(IGraphStore):
         except Exception as e:
             logger.error(f"关键词搜索函数失败: {e}")
             return [] 
+
+    def count_nodes(self) -> int:
+        """计算节点数量
+        
+        Returns:
+            int: 节点数量
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                result = session.run("MATCH (n) RETURN count(n) as count")
+                record = result.single()
+                if record:
+                    return record["count"]
+                return 0
+        except Exception as e:
+            logger.error(f"❌ 计算节点数量失败: {e}")
+            raise StorageError("query_error", f"Failed to count nodes: {str(e)}")
+
+    def count_relationships(self) -> int:
+        """计算关系数量
+        
+        Returns:
+            int: 关系数量
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                result = session.run("MATCH ()-[r]->() RETURN count(r) as count")
+                record = result.single()
+                if record:
+                    return record["count"]
+                return 0
+        except Exception as e:
+            logger.error(f"❌ 计算关系数量失败: {e}")
+            raise StorageError("query_error", f"Failed to count relationships: {str(e)}")
+
+    def get_node_types(self) -> List[str]:
+        """获取所有节点类型
+        
+        Returns:
+            List[str]: 节点类型列表
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                result = session.run("CALL db.labels() YIELD label RETURN label")
+                return [record["label"] for record in result]
+        except Exception as e:
+            logger.error(f"❌ 获取节点类型失败: {e}")
+            raise StorageError("query_error", f"Failed to get node types: {str(e)}")
+
+    def get_relationship_types(self) -> List[str]:
+        """获取所有关系类型
+        
+        Returns:
+            List[str]: 关系类型列表
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                result = session.run("CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType")
+                return [record["relationshipType"] for record in result]
+        except Exception as e:
+            logger.error(f"❌ 获取关系类型失败: {e}")
+            raise StorageError("query_error", f"Failed to get relationship types: {str(e)}")
+            
+    def count_nodes_by_label(self, label: str) -> int:
+        """计算指定标签的节点数量
+        
+        Args:
+            label: 节点标签
+            
+        Returns:
+            int: 节点数量
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                result = session.run(f"MATCH (n:{label}) RETURN count(n) as count")
+                record = result.single()
+                return record["count"] if record else 0
+        except Exception as e:
+            logger.error(f"❌ 计算节点数量失败: {e}")
+            raise StorageError("query_error", f"Failed to count nodes: {str(e)}")
+
+    def get_function_by_name(self, function_name: str) -> Optional[Dict[str, Any]]:
+        """根据函数名获取函数节点
+        
+        Args:
+            function_name: 函数名
+            
+        Returns:
+            Dict[str, Any]: 函数节点信息，如果不存在则返回None
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                # 构建查询语句，如果有project_id则添加过滤条件
+                query = """
+                MATCH (f:Function)
+                WHERE f.name = $function_name
+                """
+                
+                # 添加project_id过滤条件
+                if self.project_id:
+                    query += " AND f.project_id = $project_id"
+                
+                query += """
+                RETURN f.name as name, f.file_path as file_path, f.code as code,
+                       f.start_line as start_line, f.end_line as end_line
+                LIMIT 1
+                """
+                
+                # 准备查询参数
+                params = {"function_name": function_name}
+                if self.project_id:
+                    params["project_id"] = self.project_id
+                
+                result = session.run(query, **params)
+                record = result.single()
+                
+                if not record:
+                    return None
+                    
+                return {
+                    "name": record["name"],
+                    "file_path": record["file_path"],
+                    "code": record["code"],
+                    "start_line": record["start_line"],
+                    "end_line": record["end_line"]
+                }
+        except Exception as e:
+            logger.error(f"❌ 获取函数节点失败: {e}")
+            return None
+            
+    def get_function_callers(self, function_name: str) -> List[Dict[str, Any]]:
+        """获取调用指定函数的函数列表
+        
+        Args:
+            function_name: 函数名
+            
+        Returns:
+            List[Dict[str, Any]]: 调用者函数列表
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                # 构建查询语句，如果有project_id则添加过滤条件
+                query = """
+                MATCH (caller:Function)-[:CALLS]->(callee:Function {name: $function_name})
+                """
+                
+                # 添加project_id过滤条件
+                if self.project_id:
+                    query += " WHERE callee.project_id = $project_id AND caller.project_id = $project_id"
+                
+                query += """
+                RETURN caller.name as name, caller.file_path as file_path, caller.code as code
+                LIMIT 10
+                """
+                
+                # 准备查询参数
+                params = {"function_name": function_name}
+                if self.project_id:
+                    params["project_id"] = self.project_id
+                
+                result = session.run(query, **params)
+                
+                callers = []
+                for record in result:
+                    callers.append({
+                        "name": record["name"],
+                        "file_path": record["file_path"],
+                        "code": record["code"]
+                    })
+                    
+                return callers
+        except Exception as e:
+            logger.error(f"❌ 获取函数调用者失败: {e}")
+            return []
+            
+    def get_function_callees(self, function_name: str) -> List[Dict[str, Any]]:
+        """获取被指定函数调用的函数列表
+        
+        Args:
+            function_name: 函数名
+            
+        Returns:
+            List[Dict[str, Any]]: 被调用函数列表
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                # 构建查询语句，如果有project_id则添加过滤条件
+                query = """
+                MATCH (caller:Function {name: $function_name})-[:CALLS]->(callee:Function)
+                """
+                
+                # 添加project_id过滤条件
+                if self.project_id:
+                    query += " WHERE caller.project_id = $project_id AND callee.project_id = $project_id"
+                
+                query += """
+                RETURN callee.name as name, callee.file_path as file_path, callee.code as code
+                LIMIT 10
+                """
+                
+                # 准备查询参数
+                params = {"function_name": function_name}
+                if self.project_id:
+                    params["project_id"] = self.project_id
+                
+                result = session.run(query, **params)
+                
+                callees = []
+                for record in result:
+                    callees.append({
+                        "name": record["name"],
+                        "file_path": record["file_path"],
+                        "code": record["code"]
+                    })
+                    
+                return callees
+        except Exception as e:
+            logger.error(f"❌ 获取被调用函数失败: {e}")
+            return []
+            
+    def get_file_includes(self, file_path: str) -> List[Dict[str, Any]]:
+        """获取文件包含的头文件列表
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            List[Dict[str, Any]]: 包含的头文件列表
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                # 构建查询语句，如果有project_id则添加过滤条件
+                query = """
+                MATCH (file:File {path: $file_path})-[:INCLUDES]->(header:File)
+                """
+                
+                # 添加project_id过滤条件
+                if self.project_id:
+                    query += " WHERE file.project_id = $project_id AND header.project_id = $project_id"
+                
+                query += """
+                RETURN header.path as path
+                LIMIT 20
+                """
+                
+                # 准备查询参数
+                params = {"file_path": file_path}
+                if self.project_id:
+                    params["project_id"] = self.project_id
+                
+                result = session.run(query, **params)
+                
+                includes = []
+                for record in result:
+                    includes.append({
+                        "path": record["path"]
+                    })
+                    
+                return includes
+        except Exception as e:
+            logger.error(f"❌ 获取文件包含关系失败: {e}")
+            return []
+            
+    def get_file_included_by(self, file_path: str) -> List[Dict[str, Any]]:
+        """获取包含该文件的文件列表
+        
+        Args:
+            file_path: 文件路径
+            
+        Returns:
+            List[Dict[str, Any]]: 包含该文件的文件列表
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                # 构建查询语句，如果有project_id则添加过滤条件
+                query = """
+                MATCH (file:File)-[:INCLUDES]->(header:File {path: $file_path})
+                """
+                
+                # 添加project_id过滤条件
+                if self.project_id:
+                    query += " WHERE file.project_id = $project_id AND header.project_id = $project_id"
+                
+                query += """
+                RETURN file.path as path
+                LIMIT 20
+                """
+                
+                # 准备查询参数
+                params = {"file_path": file_path}
+                if self.project_id:
+                    params["project_id"] = self.project_id
+                
+                result = session.run(query, **params)
+                
+                included_by = []
+                for record in result:
+                    included_by.append({
+                        "path": record["path"]
+                    })
+                    
+                return included_by
+        except Exception as e:
+            logger.error(f"❌ 获取文件被包含关系失败: {e}")
+            return []
+            
+    def get_top_included_files(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取被包含次数最多的头文件
+        
+        Args:
+            limit: 返回结果数量限制
+            
+        Returns:
+            List[Dict[str, Any]]: 头文件列表，按包含次数降序排序
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                query = """
+                MATCH (file:File)-[:INCLUDES]->(header:File)
+                WHERE header.path ENDS WITH '.h'
+                WITH header.path as path, count(*) as include_count
+                ORDER BY include_count DESC
+                LIMIT $limit
+                RETURN path, include_count
+                """
+                result = session.run(query, limit=limit)
+                
+                headers = []
+                for record in result:
+                    headers.append({
+                        "path": record["path"],
+                        "include_count": record["include_count"]
+                    })
+                    
+                return headers
+        except Exception as e:
+            logger.error(f"❌ 获取热门头文件失败: {e}")
+            return []
+
+    def add_file(self, path: str, content: str, language: str = "c") -> bool:
+        # ... existing code ...
+        pass
+
+    # ... rest of the existing code ... 
