@@ -87,23 +87,21 @@ class VectorContextRetriever(IContextRetriever):
         start_time = time.time()
         
         try:
+            # 兼容处理：意图分析可能是IntentAnalysis对象或字典
+            has_keywords = False
+            if hasattr(intent_analysis, 'keywords'):
+                # 是IntentAnalysis对象
+                has_keywords = bool(intent_analysis.keywords)
+            elif isinstance(intent_analysis, dict):
+                # 是字典
+                has_keywords = bool(intent_analysis.get('keywords', []))
+            
             # 如果有意图分析结果，使用多查询策略
-            if intent_analysis and intent_analysis.keywords:
+            if intent_analysis and has_keywords:
                 context_items = self._multi_query_strategy(query, intent_analysis, config)
             else:
                 # 否则使用单一查询
                 context_items = self._single_query_strategy(query, config)
-            
-            query_time = time.time() - start_time
-            
-            logger.info(f"Vector retrieval completed: {len(context_items)} items in {query_time:.3f}s")
-            
-            return RetrievalResult(
-                items=context_items,
-                source_type=self.source_type,
-                query_time=query_time,
-                total_candidates=len(context_items)
-            )
             
         except Exception as e:
             logger.error(f"Vector retrieval failed: {e}")
@@ -113,6 +111,17 @@ class VectorContextRetriever(IContextRetriever):
                 query_time=time.time() - start_time,
                 total_candidates=0
             )
+        
+        query_time = time.time() - start_time
+        
+        logger.info(f"Vector retrieval completed: {len(context_items)} items in {query_time:.3f}s")
+        
+        return RetrievalResult(
+            items=context_items,
+            source_type=self.source_type,
+            query_time=query_time,
+            total_candidates=len(context_items)
+        )
     
     def _single_query_strategy(self, query: str, config: RetrievalConfig) -> List[ContextItem]:
         """单一查询策略
@@ -138,14 +147,14 @@ class VectorContextRetriever(IContextRetriever):
         # 转换为ContextItem
         return self._process_search_results(results, config.min_relevance_score)
     
-    def _multi_query_strategy(self, query: str, intent_analysis: IntentAnalysis, config: RetrievalConfig) -> List[ContextItem]:
+    def _multi_query_strategy(self, query: str, intent_analysis: IntentAnalysis | Dict[str, Any], config: RetrievalConfig) -> List[ContextItem]:
         """多查询策略
         
         根据意图分析结果构建多个查询
         
         Args:
             query: 用户查询
-            intent_analysis: 意图分析结果
+            intent_analysis: 意图分析结果（可能是IntentAnalysis对象或字典）
             config: 检索配置
             
         Returns:
@@ -165,8 +174,14 @@ class VectorContextRetriever(IContextRetriever):
         all_results.extend(results1)
         
         # 2. 使用关键词构建查询
-        if intent_analysis.keywords:
-            keywords_query = " ".join(intent_analysis.keywords)
+        keywords = []
+        if hasattr(intent_analysis, 'keywords'):
+            keywords = intent_analysis.keywords
+        else:
+            keywords = intent_analysis.get("keywords", [])
+            
+        if keywords:
+            keywords_query = " ".join(keywords)
             logger.info(f"查询2: 关键词查询 - {keywords_query}")
             results2 = self.vector_store.similarity_search(
                 query=keywords_query,
@@ -176,7 +191,12 @@ class VectorContextRetriever(IContextRetriever):
             all_results.extend(results2)
         
         # 3. 如果有函数名，专门查询函数
-        function_names = intent_analysis.get_function_names()
+        function_names = []
+        if hasattr(intent_analysis, 'get_function_names'):
+            function_names = intent_analysis.get_function_names()
+        else:
+            function_names = intent_analysis.get("functions", [])
+            
         if function_names:
             function_query = " ".join(function_names)
             logger.info(f"查询3: 函数查询 - {function_query}")

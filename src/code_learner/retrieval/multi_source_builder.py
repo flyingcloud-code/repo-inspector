@@ -24,6 +24,7 @@ from ..core.retriever_interfaces import (
     IMultiSourceBuilder
 )
 from ..llm.chatbot import OpenRouterChatBot
+import concurrent.futures
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,6 @@ class MultiSourceContextBuilder(IMultiSourceBuilder):
         call_graph_retriever: IContextRetriever,
         dependency_retriever: IContextRetriever,
         reranker: IReranker,
-        intent_analyzer: Any,
         config: Optional[Dict[str, Any]] = None
     ):
         """初始化多源上下文构建器
@@ -51,7 +51,6 @@ class MultiSourceContextBuilder(IMultiSourceBuilder):
             call_graph_retriever: 调用图检索器
             dependency_retriever: 依赖检索器
             reranker: 重排序器
-            intent_analyzer: 意图分析器
             config: 配置
         """
         self.retrievers = {
@@ -60,7 +59,6 @@ class MultiSourceContextBuilder(IMultiSourceBuilder):
             "dependency": dependency_retriever
         }
         self.reranker = reranker
-        self.intent_analyzer = intent_analyzer
         
         # ---------- 加载默认配置 ----------
         if config is not None:
@@ -90,80 +88,124 @@ class MultiSourceContextBuilder(IMultiSourceBuilder):
     def build_context(
         self, 
         query: str, 
-        intent_analysis: Optional[IntentAnalysis] = None,
+        intent_analysis: Dict[str, Any],
         config: Optional[Dict[str, Any]] = None
     ) -> RerankResult:
         """构建多源上下文
         
         Args:
             query: 用户查询
-            intent_analysis: 可选的意图分析结果
+            intent_analysis: 意图分析结果
             config: 可选的配置覆盖
             
         Returns:
-            最终的重排序结果
+            RerankResult: 最终的重排序结果
         """
         start_time = time.time()
         
-        # 合并配置
-        effective_config = self._merge_config(config)
+        # 应用配置覆盖
+        effective_config = self.config.copy()
+        if config:
+            effective_config.update(config)
         
-        try:
-            # 如果没有提供意图分析，则进行分析
-            if intent_analysis is None:
-                intent_analysis = self.intent_analyzer.analyze(query)
-                logger.info(f"Intent analysis: {intent_analysis.intent_type}, entities: {intent_analysis.entities}")
-            
-            # 并行执行多源检索
-            all_context_items = []
-            if effective_config.get("parallel_retrieval", True):
-                all_context_items = self._parallel_retrieve(query, intent_analysis, effective_config)
-            else:
-                all_context_items = self._sequential_retrieve(query, intent_analysis, effective_config)
-            
-            # 如果没有检索到任何结果
-            if not all_context_items:
-                logger.warning("No context items retrieved from any source")
-                return RerankResult(
-                    items=[],
-                    rerank_time=time.time() - start_time,
-                    original_count=0,
-                    confidence=0.0
-                )
-            
-            logger.info(f"Retrieved {len(all_context_items)} total items from {len(self._get_active_sources())} sources")
-            
-            # 使用LLM进行重排序
-            final_top_k = effective_config.get("final_top_k", 5)
-            rerank_result = self.reranker.rerank(query, all_context_items, final_top_k)
-            
-            # 基于缺失源数量调整置信度
-            all_sources = set(self.retrievers.keys())
-            active_sources = set(self._get_active_sources())
-            missing_sources = all_sources - active_sources
-            if missing_sources:
-                penalty = 0.1 * len(missing_sources)
-                rerank_result.confidence = max(0.0, rerank_result.confidence - penalty)
-                rerank_result.metadata = {
-                    "missing_sources": list(missing_sources)
+        logger.info(f"使用配置: final_top_k={effective_config.get('final_top_k', 5)}, parallel={effective_config.get('parallel_retrieval', True)}")
+        
+        all_context_items = []
+        
+        # 获取启用的检索源
+        active_sources = self._get_active_sources()
+        logger.info(f"激活的检索源: {active_sources}")
+        
+        if not active_sources:
+            logger.warning("No active retrieval sources configured")
+            elapsed_time = time.time() - start_time
+            return RerankResult(items=[], rerank_time=elapsed_time, original_count=0, confidence=0.0)
+        
+        # 并行或串行执行检索
+        if effective_config.get("parallel_retrieval", True):
+            # 并行检索
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future_to_source = {
+                    executor.submit(
+                        self._retrieve_from_source, 
+                        source_name, 
+                        query, 
+                        intent_analysis
+                    ): source_name for source_name in active_sources
                 }
+                
+                for future in concurrent.futures.as_completed(future_to_source):
+                    source_name = future_to_source[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            all_context_items.extend(result)
+                            logger.info(f"从 {source_name} 获取到 {len(result)} 个结果")
+                        else:
+                            logger.warning(f"{source_name} retrieval returned no results")
+                    except Exception as e:
+                        logger.error(f"Error retrieving from {source_name}: {e}")
+        else:
+            # 串行检索
+            for source_name in active_sources:
+                try:
+                    result = self._retrieve_from_source(source_name, query, intent_analysis)
+                    if result:
+                        all_context_items.extend(result)
+                        logger.info(f"从 {source_name} 获取到 {len(result)} 个结果")
+                    else:
+                        logger.warning(f"{source_name} retrieval returned no results")
+                except Exception as e:
+                    logger.error(f"Error retrieving from {source_name}: {e}")
+        
+        # 如果没有获取到任何上下文，返回空结果
+        if not all_context_items:
+            logger.warning("No context items retrieved from any source")
+            elapsed_time = time.time() - start_time
+            return RerankResult(items=[], rerank_time=elapsed_time, original_count=0, confidence=0.0)
+        
+        # 记录各检索源的项目数量
+        source_counts = {}
+        for item in all_context_items:
+            source_type = item.source_type.value if hasattr(item.source_type, 'value') else str(item.source_type)
+            source_counts[source_type] = source_counts.get(source_type, 0) + 1
+        
+        logger.info(f"各检索源项目数量: {source_counts}")
+        logger.info(f"总检索项目数量: {len(all_context_items)}")
+        
+        # 使用LLM进行重排序
+        final_top_k = effective_config.get("final_top_k", 5)
+        logger.info(f"执行重排序，目标返回数量: final_top_k={final_top_k}")
+        reranked_result = self.reranker.rerank(query, all_context_items, final_top_k)
+        
+        # 记录重排序结果
+        logger.info(f"重排序完成，实际返回数量: {len(reranked_result.items)}")
+        logger.info(f"重排序结果置信度: {reranked_result.confidence:.3f}")
+        
+        # 记录每个结果的相关信息
+        for i, item in enumerate(reranked_result.items):
+            logger.info(f"结果 {i+1}: 相关度 {item.relevance_score:.3f}, 类型 {item.source_type}, 元数据 {item.metadata}")
             
-            # 更新总时间
-            total_time = time.time() - start_time
-            rerank_result.rerank_time = total_time
-            
-            logger.info(f"Multi-source context building completed: {len(rerank_result.items)} final items in {total_time:.3f}s")
-            
-            return rerank_result
-            
-        except Exception as e:
-            logger.error(f"Multi-source context building failed: {e}")
-            return RerankResult(
-                items=[],
-                rerank_time=time.time() - start_time,
-                original_count=0,
-                confidence=0.0
-            )
+        # 基于缺失源数量调整置信度
+        all_sources = set(self.retrievers.keys())
+        active_sources = set(self._get_active_sources())
+        missing_sources = all_sources - active_sources
+        if missing_sources:
+            penalty = 0.1 * len(missing_sources)
+            reranked_result.confidence = max(0.0, reranked_result.confidence - penalty)
+            reranked_result.metadata = reranked_result.metadata or {}
+            reranked_result.metadata["missing_sources"] = list(missing_sources)
+            logger.info(f"缺失检索源: {missing_sources}，置信度惩罚: {penalty:.2f}")
+        
+        # 记录总查询时间
+        query_time = time.time() - start_time
+        if not hasattr(reranked_result, 'metadata') or reranked_result.metadata is None:
+            reranked_result.metadata = {}
+        reranked_result.metadata["query_time"] = query_time
+        
+        logger.info(f"Multi-source context building completed in {query_time:.3f}s, returned {len(reranked_result.items)} items")
+        
+        return reranked_result
     
     def _parallel_retrieve(
         self, 
@@ -310,6 +352,41 @@ class MultiSourceContextBuilder(IMultiSourceBuilder):
             if self._is_source_enabled(source_name, self.config) and retriever.is_available():
                 active_sources.append(source_name)
         return active_sources
+    
+    def _retrieve_from_source(self, source_name: str, query: str, intent_analysis: Dict[str, Any]) -> List[ContextItem]:
+        """从指定源检索上下文
+        
+        Args:
+            source_name: 源名称
+            query: 用户查询
+            intent_analysis: 意图分析结果
+            
+        Returns:
+            List[ContextItem]: 上下文项列表
+        """
+        if source_name not in self.retrievers:
+            logger.warning(f"Unknown source: {source_name}")
+            return []
+        
+        retriever = self.retrievers[source_name]
+        
+        try:
+            start_time = time.time()
+            
+            # 构建检索配置
+            retrieval_config = self._build_retrieval_config(source_name, self.config)
+            
+            # 检索
+            result = retriever.retrieve(query, intent_analysis, retrieval_config)
+            
+            # 记录检索时间
+            elapsed = time.time() - start_time
+            logger.info(f"{source_name} retrieval completed: {len(result.items) if result and result.items else 0} items in {elapsed:.3f}s")
+            
+            return result.items if result and result.items else []
+        except Exception as e:
+            logger.error(f"{source_name} retrieval failed: {e}")
+            return []
     
     def get_available_sources(self) -> List[str]:
         """获取可用的检索源列表"""

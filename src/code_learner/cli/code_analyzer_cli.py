@@ -449,8 +449,12 @@ class InteractiveQuerySession:
             except Exception as e:
                 print(f"无法加载历史记录: {e}")
     
-    def start(self):
-        """启动交互式问答会话"""
+    def start(self, direct_query=None):
+        """启动交互式问答会话或执行直接查询
+        
+        Args:
+            direct_query: 直接执行的查询，不进入交互模式
+        """
         focus_info = ""
         if self.focus_function:
             focus_info = f"函数: {self.focus_function}"
@@ -458,6 +462,41 @@ class InteractiveQuerySession:
             focus_info = f"文件: {self.focus_file}"
             
         print(f"代码问答会话 - 项目: {self.project_path} {focus_info}")
+        
+        # 如果提供了直接查询，执行后退出
+        if direct_query:
+            try:
+                # 构建上下文
+                context = {
+                    "project_path": str(self.project_path),
+                    "focus_function": self.focus_function,
+                    "focus_file": self.focus_file
+                }
+                
+                print(f"查询: {direct_query}")
+                print("处理中...")
+                answer = self.qa_service.ask_question(direct_query, context)
+                
+                # 显示答案
+                print(f"\n{answer}\n")
+                
+                # 保存到历史记录
+                self.history.append({"question": direct_query, "answer": answer})
+                
+                # 保存历史记录
+                if self.history_file:
+                    try:
+                        with open(self.history_file, "w") as f:
+                            json.dump(self.history, f, ensure_ascii=False, indent=2)
+                    except Exception as e:
+                        print(f"无法保存历史记录: {e}")
+                
+                return
+            except Exception as e:
+                print(f"\n错误: {e}")
+                return
+        
+        # 交互模式
         print("输入'exit'或'quit'退出，输入'help'获取帮助\n")
         
         while True:
@@ -813,9 +852,12 @@ def create_parser() -> argparse.ArgumentParser:
     query_parser = subparsers.add_parser("query", help="交互式代码问答")
     query_parser.add_argument("--project", "-p", required=True, 
                             help="项目路径")
+    query_parser.add_argument("--query", "-q", help="直接执行查询，不进入交互模式")
     query_parser.add_argument("--history", "-H", help="保存历史记录的文件")
     query_parser.add_argument("--function", "-f", help="聚焦于特定函数")
     query_parser.add_argument("--file", help="聚焦于特定文件")
+    query_parser.add_argument("--verbose", "-v", action="store_true", 
+                            help="显示详细日志")
     
     # status命令 - 系统状态检查
     status_parser = subparsers.add_parser("status", help="系统状态检查")
@@ -889,6 +931,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             
             history_file = Path(args.history) if args.history else None
             
+            # 设置日志级别
+            if args.verbose:
+                logging.basicConfig(level=logging.DEBUG)
+            
             session = InteractiveQuerySession(
                 project_path=project_path,
                 history_file=history_file,
@@ -896,7 +942,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 focus_file=args.file
             )
             
-            session.start()
+            session.start(args.query)
             return 0
         
         elif args.command == "status":

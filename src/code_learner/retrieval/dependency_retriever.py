@@ -39,14 +39,14 @@ class DependencyContextRetriever(IContextRetriever):
     def retrieve(
         self, 
         query: str, 
-        intent_analysis: IntentAnalysis, 
+        intent_analysis: IntentAnalysis | Dict[str, Any], 
         config: RetrievalConfig
     ) -> RetrievalResult:
         """检索依赖关系相关的上下文
         
         Args:
             query: 用户查询
-            intent_analysis: 意图分析结果
+            intent_analysis: 意图分析结果（可能是IntentAnalysis对象或字典）
             config: 检索配置
             
         Returns:
@@ -57,26 +57,27 @@ class DependencyContextRetriever(IContextRetriever):
         try:
             context_items = []
             
-            # 如果意图分析中包含文件名，执行依赖关系检索
-            if intent_analysis.has_file_names():
-                file_names = intent_analysis.get_file_names()
-                for file_name in file_names:
-                    context_items.extend(
-                        self._retrieve_by_file_name(file_name, config)
-                    )
+            # 兼容处理：意图分析可能是IntentAnalysis对象或字典
+            if hasattr(intent_analysis, 'has_function_names'):
+                # 是IntentAnalysis对象
+                has_functions = intent_analysis.has_function_names()
+                function_names = intent_analysis.get_function_names() if has_functions else []
+            else:
+                # 是字典
+                function_names = intent_analysis.get("functions", [])
+                has_functions = bool(function_names)
             
-            # 如果包含函数名，检索函数所在文件的依赖
-            if intent_analysis.has_function_names():
-                function_names = intent_analysis.get_function_names()
+            # 如果意图分析包含函数名，检索函数依赖关系
+            if has_functions:
                 for function_name in function_names:
                     context_items.extend(
                         self._retrieve_by_function_name(function_name, config)
                     )
             
-            # 如果没有明确的文件名或函数名，尝试关键词匹配
+            # 如果没有明确的函数名，尝试模糊匹配
             if not context_items:
                 context_items.extend(
-                    self._retrieve_by_keywords(query, intent_analysis, config)
+                    self._retrieve_by_fuzzy_match(query, intent_analysis, config)
                 )
             
             # 限制结果数量
@@ -188,48 +189,64 @@ class DependencyContextRetriever(IContextRetriever):
             logger.error(f"检索函数所在文件依赖关系失败: {e}")
             return []
     
-    def _retrieve_by_keywords(self, query: str, intent_analysis: IntentAnalysis, config: RetrievalConfig) -> List[ContextItem]:
-        """根据关键词检索依赖关系
+    def _retrieve_by_fuzzy_match(
+        self, 
+        query: str, 
+        intent_analysis: IntentAnalysis | Dict[str, Any], 
+        config: RetrievalConfig
+    ) -> List[ContextItem]:
+        """根据模糊匹配检索依赖关系
         
         Args:
             query: 用户查询
-            intent_analysis: 意图分析结果
+            intent_analysis: 意图分析结果（可能是IntentAnalysis对象或字典）
             config: 检索配置
             
         Returns:
             上下文项列表
         """
-        logger.info(f"根据关键词检索依赖关系")
+        logger.info(f"根据模糊匹配检索依赖关系")
         
-        # 使用简单的启发式规则：如果查询中包含"include"、"header"、"dependency"等关键词，
-        # 尝试查找项目中最重要的几个头文件
+        # 使用关键词搜索相关函数
+        if hasattr(intent_analysis, 'keywords'):
+            # IntentAnalysis对象
+            keywords = intent_analysis.keywords if intent_analysis.keywords else [query]
+        else:
+            # 字典
+            keywords = intent_analysis.get("keywords", []) or [query]
         
-        if any(word in query.lower() for word in ["include", "header", "dependency", "dependencies"]):
-            try:
-                # 获取项目中被包含次数最多的头文件
-                top_headers = self.graph_store.get_top_included_files(limit=config.top_k)
-                
-                if not top_headers:
-                    return []
-                
-                content = "Most frequently included header files:\n"
-                for header in top_headers:
-                    content += f"- {header.get('path', '')}: included {header.get('include_count', 0)} times\n"
-                
-                return [ContextItem(
-                    content=content,
-                    source_type=self.source_type,
-                    relevance_score=0.6,
-                    metadata={
-                        "relation_type": "top_headers",
-                        "header_count": len(top_headers)
-                    }
-                )]
-                
-            except Exception as e:
-                logger.error(f"检索热门头文件失败: {e}")
+        context_items = []
         
-        return []
+        for keyword in keywords:
+            # 使用简单的启发式规则：如果查询中包含"include"、"header"、"dependency"等关键词，
+            # 尝试查找项目中最重要的几个头文件
+            
+            if any(word in keyword.lower() for word in ["include", "header", "dependency", "dependencies"]):
+                try:
+                    # 获取项目中被包含次数最多的头文件
+                    top_headers = self.graph_store.get_top_included_files(limit=config.top_k)
+                    
+                    if not top_headers:
+                        return []
+                    
+                    content = f"Most frequently included header files related to '{keyword}':\n"
+                    for header in top_headers:
+                        content += f"- {header.get('path', '')}: included {header.get('include_count', 0)} times\n"
+                    
+                    context_items.append(ContextItem(
+                        content=content,
+                        source_type=self.source_type,
+                        relevance_score=0.6,
+                        metadata={
+                            "relation_type": "top_headers",
+                            "header_count": len(top_headers)
+                        }
+                    ))
+                    
+                except Exception as e:
+                    logger.error(f"检索热门头文件失败: {e}")
+        
+        return context_items
     
     def get_source_type(self) -> str:
         """获取检索器的源类型标识"""

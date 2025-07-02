@@ -17,6 +17,7 @@ from ..retrieval.dependency_retriever import DependencyContextRetriever
 from ..retrieval.multi_source_builder import MultiSourceContextBuilder
 from ..rerank.llm_reranker import LLMReranker
 from ..core.context_models import IntentAnalysis, RetrievalConfig
+from ..config.config_manager import ConfigManager
 
 logger = get_logger(__name__)
 
@@ -114,230 +115,217 @@ class CodeQAService:
             return f"抱歉，在处理您的问题时遇到了错误: {str(e)}"
     
     def _build_enhanced_code_context(self, question: str, context: Optional[dict], 
-                                     intent_analysis: Dict[str, Any]) -> str:
-        """构建增强的代码上下文
+                                 intent_analysis: Dict[str, Any]) -> str:
+        """构建增强代码上下文
+        
+        使用多源检索系统获取更全面的代码上下文
         
         Args:
             question: 用户问题
-            context: 上下文信息
+            context: 可选的上下文信息
             intent_analysis: 意图分析结果
             
         Returns:
-            str: 代码上下文
+            str: 增强的代码上下文
         """
+        logger.info("构建代码上下文...")
+        
+        # 如果没有提供上下文，创建一个空的
+        if context is None:
+            context = {}
+        
+        # 初始化上下文字符串
         code_context = ""
         
-        # 1. 处理明确指定的函数或文件
-        if context and context.get("focus_function"):
-            function_context = self._get_function_context(context["focus_function"])
-            if function_context:
-                code_context += f"## 指定函数信息\n{function_context}\n\n"
-        
-        if context and context.get("focus_file"):
-            file_context = self._get_file_context(context["focus_file"])
-            if file_context:
-                code_context += f"## 指定文件信息\n{file_context}\n\n"
-        
-        # 2. 使用多源检索系统获取上下文
         try:
+            # 使用多源检索系统
             logger.info("使用多源检索系统获取上下文...")
             
-            # 确保所有服务已初始化
-            self._ensure_services_initialized()
-            
-            # 创建检索器
-            vector_retriever = VectorContextRetriever(
-                vector_store=self.vector_store,
-                embedding_engine=self.embedding_engine
-            )
-            
-            call_graph_retriever = CallGraphContextRetriever(
-                graph_store=self.graph_store
-            )
-            
-            dependency_retriever = DependencyContextRetriever(
-                graph_store=self.graph_store
-            )
-            
-            # 创建重排序器
-            reranker = LLMReranker(
-                chatbot=self.chatbot
-            )
-            
-            # 创建多源构建器
-            builder = MultiSourceContextBuilder(
-                vector_retriever=vector_retriever,
-                call_graph_retriever=call_graph_retriever,
-                dependency_retriever=dependency_retriever,
-                reranker=reranker,
-                intent_analyzer=self.intent_analyzer
-            )
-            
-            # 转换意图分析格式
-            intent = IntentAnalysis(
-                entities=intent_analysis.get("functions", []) + intent_analysis.get("files", []),
-                intent_type=intent_analysis.get("intent_type", "general_question"),
-                keywords=intent_analysis.get("keywords", []) + intent_analysis.get("search_terms", []),
-                confidence=0.8
-            )
+            # 初始化多源构建器
+            builder = self._create_multi_source_builder()
             
             # 获取多源上下文
-            retrieval_config = RetrievalConfig(
-                final_top_k=5,
-                sources={
-                    "vector": {"top_k": 5, "enable": True},
-                    "call_graph": {"top_k": 5, "enable": True},
-                    "dependency": {"top_k": 5, "enable": True}
-                }
-            )
-            
-            # 根据意图类型调整配置
-            if intent.intent_type == "function_analysis":
-                retrieval_config.sources["call_graph"]["top_k"] = 8
-            elif intent.intent_type == "call_relationship":
-                retrieval_config.sources["call_graph"]["top_k"] = 10
-                retrieval_config.sources["vector"]["top_k"] = 3
-            elif intent.intent_type == "file_analysis":
-                retrieval_config.sources["dependency"]["top_k"] = 8
+            # 从配置管理器获取final_top_k
+            config_mgr = ConfigManager()
+            final_top_k = config_mgr.get_config().enhanced_query.final_top_k
+            logger.info(f"从配置获取final_top_k={final_top_k}")
             
             # 执行多源检索
-            context_items = builder.build_context(question, intent, retrieval_config)
+            rerank_result = builder.build_context(
+                query=question, 
+                intent_analysis=intent_analysis,
+                config={"final_top_k": final_top_k}
+            )
             
             # 将结果格式化为字符串
-            if context_items:
+            if rerank_result and hasattr(rerank_result, 'items') and rerank_result.items:
                 code_context += "## 多源检索结果\n\n"
+                logger.info(f"多源检索找到 {len(rerank_result.items)} 个相关代码片段，置信度: {rerank_result.confidence:.3f}")
                 
-                for i, item in enumerate(context_items):
-                    # 添加来源标识
-                    source_tag = f"[{item.source_type}]" if item.source_type else ""
+                for i, item in enumerate(rerank_result.items):
+                    # 添加分隔符
+                    if i > 0:
+                        code_context += "\n---\n\n"
                     
                     # 添加元数据信息
-                    meta_info = []
-                    if item.metadata:
-                        if "file_path" in item.metadata:
-                            meta_info.append(f"文件: {item.metadata['file_path']}")
-                        if "function_name" in item.metadata:
-                            meta_info.append(f"函数: {item.metadata['function_name']}")
-                        if "start_line" in item.metadata and "end_line" in item.metadata:
-                            meta_info.append(f"行: {item.metadata['start_line']}-{item.metadata['end_line']}")
+                    metadata = item.metadata or {}
+                    file_path = metadata.get("file_path", "Unknown")
+                    function_name = metadata.get("function_name", "")
+                    relation_type = metadata.get("relation_type", "")
+                    source_type = item.source_type.value if hasattr(item.source_type, 'value') else str(item.source_type)
                     
-                    meta_str = f" ({', '.join(meta_info)})" if meta_info else ""
+                    # 构建标题
+                    title = f"### 代码片段 {i+1}"
+                    if function_name:
+                        title += f": 函数 `{function_name}`"
+                    if relation_type:
+                        title += f" ({relation_type})"
                     
-                    # 添加内容
-                    code_context += f"### 片段 {i+1} {source_tag}{meta_str}\n```\n{item.content}\n```\n\n"
-                
-                logger.info(f"多源检索成功，获取到 {len(context_items)} 个上下文片段")
+                    code_context += f"{title}\n"
+                    code_context += f"文件: {file_path}\n"
+                    code_context += f"来源: {source_type}, 相关度: {item.relevance_score:.3f}\n\n"
+                    
+                    # 添加代码内容
+                    if item.content.strip().startswith("```") or item.content.strip().endswith("```"):
+                        # 已经有代码块标记
+                        code_context += f"{item.content}\n"
+                    else:
+                        # 添加代码块标记
+                        code_context += f"```c\n{item.content}\n```\n"
             else:
-                logger.warning("多源检索未返回结果")
+                logger.warning("多源检索未返回结果或返回空列表")
                 
-                # 回退到传统向量检索
-                vector_context = self._get_enhanced_vector_context(question, intent_analysis)
-                if vector_context:
-                    code_context += vector_context
+                # 尝试直接使用向量检索作为备选
+                logger.info("回退到向量检索...")
+                code_context += self._get_enhanced_vector_context(question, intent_analysis, top_k=final_top_k)
                 
         except Exception as e:
-            logger.error(f"多源检索失败: {e}", exc_info=True)
+            logger.error(f"构建增强代码上下文失败: {e}", exc_info=True)
             
-            # 回退到传统向量检索
-            vector_context = self._get_enhanced_vector_context(question, intent_analysis)
-            if vector_context:
-                code_context += vector_context
-            
-            # 回退到Neo4j检索
-            neo4j_context = self._get_neo4j_context_from_intent(intent_analysis)
-            if neo4j_context:
-                code_context += neo4j_context
-        
-        # 如果没有获取到任何上下文，添加一个提示
-        if not code_context.strip():
-            code_context = "未找到相关代码上下文。请尝试提供更具体的问题或指定函数/文件名。"
-            logger.warning("未找到相关代码上下文")
+            # 出错时也尝试使用向量检索作为备选
+            logger.info("发生错误，回退到向量检索...")
+            code_context += self._get_enhanced_vector_context(question, intent_analysis)
         
         return code_context
     
+    def _create_multi_source_builder(self) -> MultiSourceContextBuilder:
+        """创建多源上下文构建器
+        
+        初始化所有必要的检索器和重排序器
+        
+        Returns:
+            MultiSourceContextBuilder: 多源构建器实例
+        """
+        # 确保所有服务已初始化
+        self._ensure_services_initialized()
+        
+        # 创建检索器
+        vector_retriever = VectorContextRetriever(
+            vector_store=self.vector_store,
+            embedding_engine=self.embedding_engine
+        )
+        
+        call_graph_retriever = CallGraphContextRetriever(
+            graph_store=self.graph_store
+        )
+        
+        dependency_retriever = DependencyContextRetriever(
+            graph_store=self.graph_store
+        )
+        
+        # 创建重排序器
+        reranker = LLMReranker(
+            chatbot=self.chatbot
+        )
+        
+        # 创建多源构建器
+        builder = MultiSourceContextBuilder(
+            vector_retriever=vector_retriever,
+            call_graph_retriever=call_graph_retriever,
+            dependency_retriever=dependency_retriever,
+            reranker=reranker
+        )
+        
+        return builder
+    
     def _get_enhanced_vector_context(self, question: str, intent_analysis: Dict[str, Any], top_k: int = 5) -> str:
-        """获取增强的向量上下文
+        """使用向量检索获取增强上下文
+        
+        当多源检索失败时的备选方案
         
         Args:
-            question: 问题文本
+            question: 用户问题
             intent_analysis: 意图分析结果
             top_k: 返回结果数量
             
         Returns:
-            str: 向量上下文
+            str: 向量检索上下文
         """
-        # 延迟加载嵌入引擎
-        if not self.embedding_engine:
-            self.embedding_engine = ServiceFactory.get_embedding_engine()
-            if not self.embedding_engine.model:
-                self.embedding_engine.load_model("jinaai/jina-embeddings-v2-base-code")
-        
-        # 检查向量存储是否已初始化
-        if not self.vector_store or not self.vector_store.client:
-            logger.warning("向量存储未初始化，跳过向量检索")
-            return ""
+        logger.info(f"向量检索查询: {question}")
         
         try:
-            # 构建更智能的查询
-            search_queries = self._build_search_queries(question, intent_analysis)
-            
-            all_results = []
-            for query in search_queries:
-                logger.info(f"向量检索查询: {query}")
-                
-                # 生成查询嵌入向量
-                query_embedding = self.embedding_engine.encode_text(query)
-                if query_embedding is None:
-                    continue
-                
-                # 确保嵌入向量是list格式
-                if hasattr(query_embedding, 'tolist'):
-                    query_vector = query_embedding.tolist()
-                else:
-                    query_vector = list(query_embedding)
-                
-                # 执行向量查询
-                results = self.vector_store.query_embeddings(
-                    query_vector=query_vector,
-                    n_results=top_k // len(search_queries) + 1,
-                collection_name="code_embeddings"
-            )
-                
-                all_results.extend(results)
-            
-            # 去重并按相似度排序
-            unique_results = self._deduplicate_results(all_results)
-            top_results = sorted(unique_results, key=lambda x: x.get('distance', 1.0))[:top_k]
-            
-            if not top_results:
-                logger.warning("向量检索未找到相关结果")
+            # 确保向量存储已初始化
+            if not self.vector_store or not self.embedding_engine:
+                logger.warning("向量存储或嵌入引擎未初始化")
                 return ""
             
-            # 构建上下文
-            context_parts = []
-            for i, result in enumerate(top_results):
-                metadata = result.get('metadata', {})
-                document = result.get('document', '')
-                distance = result.get('distance', 1.0)
-                
-                context_part = f"### 代码片段 {i+1} (相似度: {1-distance:.3f})\n"
-                
-                # 添加元数据信息
-                if metadata.get('function_name'):
-                    context_part += f"**函数**: {metadata['function_name']}\n"
-                if metadata.get('file_path'):
-                    context_part += f"**文件**: {metadata['file_path']}\n"
-                if metadata.get('chunk_type'):
-                    context_part += f"**类型**: {metadata['chunk_type']}\n"
-                
-                context_part += f"**代码**:\n```c\n{document}\n```\n"
-                context_parts.append(context_part)
+            # 构建多个搜索查询
+            search_queries = self._build_search_queries(question, intent_analysis)
             
-            logger.info(f"向量检索找到 {len(top_results)} 个相关代码片段")
-            return "\n".join(context_parts)
+            # 存储所有结果
+            all_results = []
+            
+            # 对每个查询执行向量检索
+            for query in search_queries:
+                results = self.vector_store.similarity_search(
+                    query=query,
+                    top_k=top_k,
+                    embedding_engine=self.embedding_engine
+                )
+                
+                if results:
+                    all_results.extend(results)
+            
+            # 去重
+            unique_results = self._deduplicate_results(all_results)
+            
+            # 限制结果数量
+            unique_results = unique_results[:top_k]
+            
+            logger.info(f"向量检索找到 {len(unique_results)} 个相关代码片段")
+            
+            # 格式化结果
+            if not unique_results:
+                return ""
+            
+            context = "## 向量检索结果\n\n"
+            
+            for i, result in enumerate(unique_results):
+                # 添加分隔符
+                if i > 0:
+                    context += "\n---\n\n"
+                
+                # 提取元数据
+                metadata = result.get("metadata", {})
+                file_path = metadata.get("file_path", "未知文件")
+                function_name = metadata.get("function_name", "")
+                
+                # 构建标题
+                title = f"### 代码片段 {i+1}"
+                if function_name:
+                    title += f": 函数 `{function_name}`"
+                
+                context += f"{title}\n"
+                context += f"文件: {file_path}\n\n"
+                
+                # 添加代码内容
+                content = result.get("document", "") or result.get("content", "")
+                context += f"```c\n{content}\n```\n"
+            
+            return context
             
         except Exception as e:
-            logger.error(f"向量检索失败: {e}")
+            logger.error(f"向量检索失败: {e}", exc_info=True)
             return ""
     
     def _build_search_queries(self, question: str, intent_analysis: Dict[str, Any]) -> List[str]:
@@ -383,7 +371,14 @@ class CodeQAService:
         
         # 去重并限制数量
         unique_queries = list(dict.fromkeys(queries))  # 保持顺序的去重
-        return unique_queries[:3]  # 限制查询数量避免过度检索
+        
+        # 确保函数名相关查询优先返回
+        function_queries = [q for q in unique_queries if any(func in q for func in intent_analysis.get("functions", []))]
+        other_queries = [q for q in unique_queries if q not in function_queries]
+        
+        # 组合并限制返回5个查询
+        prioritized_queries = function_queries + other_queries
+        return prioritized_queries[:5]  # 增加到5个查询以提高召回率
     
     def _deduplicate_results(self, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """去重检索结果

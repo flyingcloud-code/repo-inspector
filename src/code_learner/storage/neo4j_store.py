@@ -156,7 +156,7 @@ class Neo4jGraphStore(IGraphStore):
             self.connected = False
             raise StorageError("connection_error", error_msg)
 
-    def store_parsed_code(self, parsed_code):
+    def store_parsed_code(self, parsed_code: ParsedCode) -> bool:
         """存储解析后的代码信息
         
         Args:
@@ -172,61 +172,11 @@ class Neo4jGraphStore(IGraphStore):
             raise StorageError("storage_connection", "Not connected to Neo4j database")
         
         try:
-            # 获取文件路径和语言
-            file_path = parsed_code.file_info.path
-            language = parsed_code.file_info.file_type or "c"
-            
-            # 如果没有设置project_id，使用文件路径的哈希作为默认project_id
-            if not self.project_id:
-                self.project_id = "auto_" + hashlib.md5(file_path.encode()).hexdigest()[:8]
-                logger.info(f"未设置project_id，使用自动生成的ID: {self.project_id}")
-            
-            func_count = len(parsed_code.functions)
-            
-            logger.info(f"📁 Storing parsed code for file: {file_path}")
-            
-            # 创建文件节点
-            file_node_created = self.create_file_node(
-                file_path=file_path,
-                language=language
-            )
-            
-            if not file_node_created:
-                logger.warning(f"文件节点创建失败: {file_path}")
-                return False
-            
-            # 创建函数节点
-            for function in parsed_code.functions:
-                function_node_created = self.create_function_node(
-                    file_path=file_path,
-                    name=function.name,
-                    start_line=function.start_line,
-                    end_line=function.end_line,
-                    docstring=function.docstring,
-                    parameters=function.parameters,
-                    return_type=function.return_type
-                )
-                
-                if not function_node_created:
-                    logger.warning(f"函数节点创建失败: {function.name} in {file_path}")
-                
-                # 创建函数调用关系
-                for call in function.calls:
-                    call_created = self.create_function_call(
-                        caller_file=file_path,
-                        caller_name=function.name,
-                        callee_name=call
-                    )
-                    
-                    if not call_created:
-                        logger.warning(f"函数调用关系创建失败: {function.name} -> {call}")
-            
-            logger.info(f"✅ Successfully stored {func_count} functions from {file_path}")
-            return True
-            
+            with self.driver.session() as session:
+                return session.execute_write(self._store_code_transaction, parsed_code)
         except Exception as e:
-            logger.error(f"❌ Unexpected error during storage of {file_path}: {e}")
-            raise StorageError("storage_operation", f"Unexpected error during storage of {file_path}: {e}")
+            logger.error(f"❌ Failed to execute store_parsed_code transaction: {e}")
+            raise StorageError("storage_operation", f"Transaction failed during storage of {parsed_code.file_info.path}: {e}")
 
     def _store_code_transaction(self, tx, parsed_code: ParsedCode) -> bool:
         """在事务中存储代码数据
@@ -241,6 +191,8 @@ class Neo4jGraphStore(IGraphStore):
         file_path = parsed_code.file_info.path
         file_name = os.path.basename(file_path)
         language = parsed_code.file_info.file_type or "c"
+        file_size = parsed_code.file_info.size
+        last_modified = parsed_code.file_info.last_modified
         
         # 如果没有设置project_id，使用文件路径的哈希作为默认project_id
         if not self.project_id:
@@ -252,6 +204,8 @@ class Neo4jGraphStore(IGraphStore):
         MERGE (f:File {path: $path, project_id: $project_id})
         SET f.name = $name,
             f.language = $language,
+            f.size = $size,
+            f.last_modified = $last_modified,
             f.last_updated = datetime()
         RETURN f
         """
@@ -260,61 +214,85 @@ class Neo4jGraphStore(IGraphStore):
             "path": file_path,
             "name": file_name,
             "language": language,
+            "size": file_size,
+            "last_modified": last_modified,
             "project_id": self.project_id
         }
         
         tx.run(file_query, file_params)
         
-        # 创建函数节点并建立与文件的关系
-        for function in parsed_code.functions:
-            function_query = """
-            MERGE (fn:Function {name: $name, file_path: $file_path, project_id: $project_id})
-            SET fn.start_line = $start_line,
-                fn.end_line = $end_line,
-                fn.docstring = $docstring,
-                fn.parameters = $parameters,
-                fn.return_type = $return_type,
+        # 创建或合并模块节点，并建立文件与模块的关系
+        module_path = str(Path(file_path).parent)
+        module_query = """
+        MATCH (f:File {path: $file_path, project_id: $project_id})
+        MERGE (m:Module {name: $module_path, project_id: $project_id})
+        MERGE (f)-[:BELONGS_TO]->(m)
+        """
+        module_params = {
+            "file_path": file_path,
+            "module_path": module_path,
+            "project_id": self.project_id
+        }
+        tx.run(module_query, module_params)
+        
+        # 批量创建函数节点并建立与文件的关系
+        if parsed_code.functions:
+            function_creation_query = """
+            UNWIND $functions AS func
+            MERGE (fn:Function {name: func.name, file_path: $file_path, project_id: $project_id})
+            SET fn.start_line = func.start_line,
+                fn.end_line = func.end_line,
+                fn.docstring = func.docstring,
+                fn.parameters = func.parameters,
+                fn.return_type = func.return_type,
+                fn.code = func.code,
                 fn.last_updated = datetime()
-            WITH fn
+            WITH fn, func
             MATCH (f:File {path: $file_path, project_id: $project_id})
             MERGE (f)-[:CONTAINS]->(fn)
-            RETURN fn
             """
             
-            function_params = {
-                "name": function.name,
-                "file_path": file_path,
-                "start_line": function.start_line,
-                "end_line": function.end_line,
-                "docstring": function.docstring or "",
-                "parameters": function.parameters or [],
-                "return_type": function.return_type or "",
-                "project_id": self.project_id
-            }
+            functions_data = [
+                {
+                    "name": f.name,
+                    "start_line": f.start_line,
+                    "end_line": f.end_line,
+                    "docstring": f.docstring or "",
+                    "parameters": f.parameters or [],
+                    "return_type": f.return_type or "",
+                    "code": f.code or ""
+                } for f in parsed_code.functions
+            ]
             
-            tx.run(function_query, function_params)
+            tx.run(function_creation_query, functions=functions_data, file_path=file_path, project_id=self.project_id)
+
+        # 批量创建函数调用关系
+        if parsed_code.call_relationships:
+            call_relationship_query = """
+            UNWIND $calls AS call
+            MATCH (caller:Function {name: call.caller_name, file_path: call.file_path, project_id: $project_id})
+            MATCH (callee:Function {name: call.callee_name, project_id: $project_id})
+            MERGE (caller)-[r:CALLS]->(callee)
+            ON CREATE SET r.line = call.line_number, r.context = call.context, r.last_updated = datetime()
+            """
             
-            # 创建函数调用关系
-            for call in function.calls:
-                call_query = """
-                MATCH (caller:Function {name: $caller_name, file_path: $file_path, project_id: $project_id})
-                MERGE (callee:Function {name: $callee_name, project_id: $project_id})
-                MERGE (caller)-[:CALLS]->(callee)
-                """
-                
-                call_params = {
-                    "caller_name": function.name,
-                    "file_path": file_path,
-                    "callee_name": call,
-                    "project_id": self.project_id
-                }
-                
-                tx.run(call_query, call_params)
+            calls_data = [
+                {
+                    "caller_name": call.caller_name,
+                    "callee_name": call.callee_name,
+                    "file_path": call.file_path,
+                    "line_number": call.line_number,
+                    "context": call.context
+                } for call in parsed_code.call_relationships
+            ]
+            
+            tx.run(call_relationship_query, calls=calls_data, project_id=self.project_id)
         
+        logger.info(f"✅ Successfully processed {len(parsed_code.functions)} functions and {len(parsed_code.call_relationships)} calls from {file_path} in transaction.")
         return True
 
     def create_file_node(self, file_path: str, language: str) -> bool:
-        """创建文件节点
+        """创建单个文件节点
         
         Args:
             file_path: 文件路径
@@ -436,7 +414,7 @@ class Neo4jGraphStore(IGraphStore):
 
     def create_function_node(self, file_path: str, name: str, start_line: int, end_line: int, 
                             docstring: str = "", parameters: List[str] = None, 
-                            return_type: str = "") -> bool:
+                            return_type: str = "", code: str = None) -> bool:
         """创建函数节点
         
         Args:
@@ -447,6 +425,7 @@ class Neo4jGraphStore(IGraphStore):
             docstring: 函数文档字符串
             parameters: 参数列表
             return_type: 返回类型
+            code: 函数的源代码
             
         Returns:
             bool: 创建是否成功
@@ -458,6 +437,15 @@ class Neo4jGraphStore(IGraphStore):
             raise StorageError("storage_connection", "Not connected to Neo4j database")
             
         try:
+            # 如果没有提供代码但有位置信息，尝试从文件读取
+            if not code and file_path and start_line and end_line:
+                try:
+                    code = self._read_function_from_file(file_path, start_line, end_line)
+                    if code:
+                        logger.debug(f"Successfully read function code from file: {name}")
+                except Exception as e:
+                    logger.warning(f"Could not read function code from file for {name}: {e}")
+
             with self.driver.session() as session:
                 # 首先检查文件节点是否存在
                 file_check_query = """
@@ -518,6 +506,7 @@ class Neo4jGraphStore(IGraphStore):
                         docstring: $docstring,
                         parameters: $parameters,
                         return_type: $return_type,
+                        code: $code,
                         project_id: $project_id
                     })
                     CREATE (file)-[:CONTAINS {project_id: $project_id}]->(func)
@@ -531,6 +520,7 @@ class Neo4jGraphStore(IGraphStore):
                         "docstring": docstring,
                         "parameters": parameters,
                         "return_type": return_type,
+                        "code": code,
                         "project_id": self.project_id
                     }
                 else:
@@ -545,7 +535,8 @@ class Neo4jGraphStore(IGraphStore):
                         end_line: $end_line,
                         docstring: $docstring,
                         parameters: $parameters,
-                        return_type: $return_type
+                        return_type: $return_type,
+                        code: $code
                     })
                     CREATE (file)-[:CONTAINS]->(func)
                     RETURN func
@@ -557,7 +548,8 @@ class Neo4jGraphStore(IGraphStore):
                         "end_line": end_line,
                         "docstring": docstring,
                         "parameters": parameters,
-                        "return_type": return_type
+                        "return_type": return_type,
+                        "code": code
                     }
                 
                 logger.debug(f"执行查询: {query}")
@@ -598,6 +590,7 @@ class Neo4jGraphStore(IGraphStore):
                             docstring: $docstring,
                             parameters: $parameters,
                             return_type: $return_type,
+                            code: $code,
                             project_id: $project_id
                         })
                         CREATE (file)-[:CONTAINS {project_id: $project_id}]->(func)
@@ -611,6 +604,7 @@ class Neo4jGraphStore(IGraphStore):
                             "docstring": docstring,
                             "parameters": parameters,
                             "return_type": return_type,
+                            "code": code,
                             "project_id": self.project_id
                         }
                         result = session.run(create_query, create_params)
@@ -1028,36 +1022,58 @@ class Neo4jGraphStore(IGraphStore):
         
         try:
             with self.driver.session() as session:
-                # 单次查询，获取函数代码或位置信息
+                # 使用与方法3相同的查询语法
                 query = """
-                MATCH (f:Function {name: $name})
-                OPTIONAL MATCH (file:File)-[:CONTAINS]->(f)
-                RETURN f.code as code, file.path as file_path, 
-                       f.start_line as start_line, f.end_line as end_line
+                MATCH (f:Function {name: $name})<-[:CONTAINS]-(file:File)
+                RETURN f.name as name, f.file_path as file_path, f.code as code, file.path as real_path
+                LIMIT 1
                 """
-                result = session.run(query, name=function_name)
+                
+                # 准备查询参数
+                params = {
+                    "name": function_name
+                }
+                
+                result = session.run(query, params)
                 record = result.single()
                 
                 if not record:
                     logger.warning(f"函数 '{function_name}' 未找到")
                     return None
                 
-                # 优先使用存储的代码
-                if record.get("code"):
-                    return record["code"]
+                code = record.get("code")
                 
-                # 如果没有存储代码但有位置信息，从文件读取
-                if record.get("file_path") and record.get("start_line") and record.get("end_line"):
-                    return self._read_function_from_file(
-                        record["file_path"], 
-                        record["start_line"], 
+                # 如果没有代码但有位置信息，尝试从文件读取
+                file_path = record.get("real_path") or record.get("file_path")
+                if not code and file_path and record.get("start_line") and record.get("end_line"):
+                    code = self._read_function_from_file(
+                        file_path,
+                        record["start_line"],
                         record["end_line"]
                     )
-                
-                return None
                     
+                    if code:
+                        # 更新数据库中的代码字段
+                        update_query = """
+                        MATCH (f:Function {name: $name})<-[:CONTAINS]-(file:File)
+                        SET f.code = $code
+                        """
+                        
+                        update_params = {
+                            "name": function_name,
+                            "code": code
+                        }
+                        
+                        try:
+                            session.run(update_query, update_params)
+                            logger.info(f"更新了函数 {function_name} 的代码")
+                        except Exception as update_error:
+                            logger.warning(f"更新函数代码失败: {update_error}")
+                
+                return code
+                
         except Exception as e:
-            logger.error(f"从Neo4j检索函数代码失败: {e}")
+            logger.error(f"❌ 获取函数代码失败: {e}")
             return None
     
     def _read_function_from_file(self, file_path: str, start_line: int, end_line: int) -> Optional[str]:
@@ -1535,57 +1551,37 @@ class Neo4jGraphStore(IGraphStore):
         
         try:
             with self.driver.session() as session:
-                # 先尝试删除旧的文件路径约束
+                # 先尝试删除可能存在的旧约束，以确保向后兼容
                 try:
-                    session.run("DROP CONSTRAINT file_path_unique IF EXISTS")
-                    logger.info("已删除旧的文件路径约束")
-                except Exception as e:
-                    logger.warning(f"删除旧约束时出错: {e}")
-                    
-                # 尝试删除旧的函数节点约束
-                try:
+                    session.run("DROP CONSTRAINT function_name_file_project_unique IF EXISTS")
                     session.run("DROP CONSTRAINT function_name_file_unique IF EXISTS")
-                    logger.info("已删除旧的函数节点约束")
+                    session.run("DROP CONSTRAINT file_path_project_unique IF EXISTS")
+                    session.run("DROP CONSTRAINT file_path_unique IF EXISTS")
+                    session.run("DROP CONSTRAINT module_name_unique IF EXISTS")
+                    session.run("DROP CONSTRAINT module_name_project_unique IF EXISTS")
+                    logger.info("已删除可能存在的旧约束，准备创建新约束")
                 except Exception as e:
-                    logger.warning(f"删除旧约束时出错: {e}")
+                    logger.warning(f"删除旧约束时出错（可能它们不存在，可忽略）: {e}")
                 
-                # 创建函数节点的唯一约束
-                if self.project_id:
-                    # 项目隔离模式：函数名称和文件路径在项目内唯一
-                    session.run("""
-                        CREATE CONSTRAINT function_name_file_project_unique IF NOT EXISTS
-                        FOR (f:Function)
-                        REQUIRE (f.name, f.file_path, f.project_id) IS UNIQUE
-                    """)
-                else:
-                    # 向后兼容：函数名称和文件路径全局唯一
-                    session.run("""
-                        CREATE CONSTRAINT function_name_file_unique IF NOT EXISTS
-                        FOR (f:Function)
-                        REQUIRE (f.name, f.file_path) IS UNIQUE
-                    """)
-                
-                # 创建文件节点的唯一约束
-                if self.project_id:
-                    # 项目隔离模式：文件路径在项目内唯一
-                    session.run("""
-                        CREATE CONSTRAINT file_path_project_unique IF NOT EXISTS
-                        FOR (f:File)
-                        REQUIRE (f.path, f.project_id) IS UNIQUE
-                    """)
-                else:
-                    # 向后兼容：全局唯一文件路径
-                    session.run("""
-                        CREATE CONSTRAINT file_path_unique IF NOT EXISTS
-                        FOR (f:File)
-                        REQUIRE f.path IS UNIQUE
-                    """)
-                
-                # 创建模块节点的唯一约束
+                # 创建函数节点的唯一约束 (项目隔离)
                 session.run("""
-                    CREATE CONSTRAINT module_name_unique IF NOT EXISTS
+                    CREATE CONSTRAINT function_unique IF NOT EXISTS
+                    FOR (f:Function)
+                    REQUIRE (f.name, f.file_path, f.project_id) IS UNIQUE
+                """)
+                
+                # 创建文件节点的唯一约束 (项目隔离)
+                session.run("""
+                    CREATE CONSTRAINT file_unique IF NOT EXISTS
+                    FOR (f:File)
+                    REQUIRE (f.path, f.project_id) IS UNIQUE
+                """)
+                
+                # 创建模块节点的唯一约束 (项目隔离)
+                session.run("""
+                    CREATE CONSTRAINT module_unique IF NOT EXISTS
                     FOR (m:Module)
-                    REQUIRE m.name IS UNIQUE
+                    REQUIRE (m.name, m.project_id) IS UNIQUE
                 """)
                 
                 # 创建索引以提高查询性能
@@ -1664,14 +1660,39 @@ class Neo4jGraphStore(IGraphStore):
         return result 
 
     def run_query(self, query: str, params: Dict = None) -> List[Dict]:
-        """执行自定义查询
+        """执行自定义Cypher查询
         
         Args:
             query: Cypher查询语句
             params: 查询参数
             
         Returns:
-            List[Dict]: 查询结果列表
+            查询结果列表
+        
+        Raises:
+            StorageError: 查询失败时抛出异常
+        """
+        if not self.driver:
+            raise StorageError("storage_connection", "Not connected to Neo4j database")
+        
+        try:
+            with self.driver.session() as session:
+                result = session.run(query, params)
+                # 修复: 直接返回列表，避免ResultConsumedError
+                return [dict(record) for record in result]
+        except Exception as e:
+            logger.error(f"执行查询失败: {e}")
+            raise StorageError("query_execution_failed", str(e))
+            
+    def query(self, query: str, params: Dict = None):
+        """执行Cypher查询并返回结果
+        
+        Args:
+            query: Cypher查询语句
+            params: 查询参数
+            
+        Returns:
+            查询结果 (已被消费为列表)
             
         Raises:
             StorageError: 查询失败时抛出异常
@@ -1681,54 +1702,12 @@ class Neo4jGraphStore(IGraphStore):
             
         try:
             with self.driver.session() as session:
-                # 如果启用了项目隔离，但查询中没有明确指定项目ID，则添加项目ID过滤条件
-                if self.project_id and "project_id" not in query:
-                    # 检查是否是简单的MATCH查询，可以安全地添加项目ID过滤
-                    if query.strip().upper().startswith("MATCH") and "WHERE" not in query:
-                        parts = query.split("RETURN", 1)
-                        if len(parts) == 2:
-                            match_part = parts[0]
-                            # 使用正则一次性捕获所有节点变量 (形如 MATCH (f:Function) 或 MATCH (n))
-                            node_vars = re.findall(r"\(\s*([A-Za-z0-9_]+)\s*:[^)]*\)", match_part)
-                            # 如果未能通过带label的形式捕获，再捕获无label的
-                            if not node_vars:
-                                node_vars = re.findall(r"\(\s*([A-Za-z0-9_]+)\s*\)", match_part)
-                            if node_vars:
-                                where_clauses = [f"({var}.project_id = $project_id OR {var}.project_id IS NULL)" for var in node_vars]
-                                where_part = " AND ".join(where_clauses)
-                                modified_query = f"{parts[0]} WHERE {where_part} RETURN {parts[1]}"
-                                logger.info(f"[run_query] 自动添加项目ID过滤: {modified_query.strip()}")
-                                query = modified_query
-                                if params is None:
-                                    params = {}
-                                params.setdefault("project_id", self.project_id)
-                
-                logger.debug(f"执行查询: {query}")
-                logger.debug(f"查询参数: {params}")
-                
                 result = session.run(query, params)
-                records = []
-                
-                for record in result:
-                    skip_record = False
-                    record_dict = {}
-                    for key, value in record.items():
-                        if isinstance(value, Node):
-                            node_dict = dict(value)
-                            # 若节点含有project_id且与当前store不符，则过滤该记录
-                            if "project_id" in node_dict and node_dict["project_id"] != self.project_id:
-                                skip_record = True
-                                break
-                            record_dict[key] = node_dict
-                        else:
-                            record_dict[key] = value
-                    if not skip_record:
-                        records.append(record_dict)
-                
-                return records
+                # 修复: 直接返回列表，避免ResultConsumedError
+                return list(result)
         except Exception as e:
             logger.error(f"执行查询失败: {e}")
-            raise StorageError("run_query", str(e)) 
+            raise StorageError("query_execution_failed", str(e))
 
     def search_functions_by_keywords(self, keywords: List[str], max_results: int = 5) -> List[Dict[str, Any]]:
         """通过关键词搜索函数
@@ -1953,40 +1932,68 @@ class Neo4jGraphStore(IGraphStore):
         
         try:
             with self.driver.session() as session:
-                # 构建查询语句，如果有project_id则添加过滤条件
+                # 使用与方法3相同的查询语法
                 query = """
-                MATCH (f:Function)
-                WHERE f.name = $function_name
-                """
-                
-                # 添加project_id过滤条件
-                if self.project_id:
-                    query += " AND f.project_id = $project_id"
-                
-                query += """
+                MATCH (f:Function {name: $function_name})<-[:CONTAINS]-(file:File)
                 RETURN f.name as name, f.file_path as file_path, f.code as code,
-                       f.start_line as start_line, f.end_line as end_line
+                       f.start_line as start_line, f.end_line as end_line,
+                       f.docstring as docstring, f.parameters as parameters,
+                       f.return_type as return_type, file.path as real_path
                 LIMIT 1
                 """
                 
                 # 准备查询参数
-                params = {"function_name": function_name}
-                if self.project_id:
-                    params["project_id"] = self.project_id
+                params = {
+                    "function_name": function_name
+                }
                 
-                result = session.run(query, **params)
+                result = session.run(query, params)
                 record = result.single()
                 
                 if not record:
                     return None
                     
-                return {
+                function_info = {
                     "name": record["name"],
-                    "file_path": record["file_path"],
+                    "file_path": record.get("real_path") or record["file_path"],
                     "code": record["code"],
                     "start_line": record["start_line"],
-                    "end_line": record["end_line"]
+                    "end_line": record["end_line"],
+                    "docstring": record.get("docstring", ""),
+                    "parameters": record.get("parameters", []),
+                    "return_type": record.get("return_type", "")
                 }
+                
+                # 如果没有代码但有位置信息，尝试从文件读取
+                if not function_info["code"] and function_info["file_path"] and function_info["start_line"] and function_info["end_line"]:
+                    code = self._read_function_from_file(
+                        function_info["file_path"],
+                        function_info["start_line"],
+                        function_info["end_line"]
+                    )
+                    
+                    if code:
+                        function_info["code"] = code
+                        
+                        # 更新数据库中的代码字段
+                        update_query = """
+                        MATCH (f:Function {name: $name})<-[:CONTAINS]-(file:File)
+                        SET f.code = $code
+                        """
+                        
+                        update_params = {
+                            "name": function_name,
+                            "code": code
+                        }
+                        
+                        try:
+                            session.run(update_query, update_params)
+                            logger.info(f"更新了函数 {function_name} 的代码")
+                        except Exception as update_error:
+                            logger.warning(f"更新函数代码失败: {update_error}")
+                
+                return function_info
+                
         except Exception as e:
             logger.error(f"❌ 获取函数节点失败: {e}")
             return None
@@ -2005,32 +2012,27 @@ class Neo4jGraphStore(IGraphStore):
         
         try:
             with self.driver.session() as session:
-                # 构建查询语句，如果有project_id则添加过滤条件
+                # 使用简单直接的查询语法
                 query = """
                 MATCH (caller:Function)-[:CALLS]->(callee:Function {name: $function_name})
-                """
-                
-                # 添加project_id过滤条件
-                if self.project_id:
-                    query += " WHERE callee.project_id = $project_id AND caller.project_id = $project_id"
-                
-                query += """
-                RETURN caller.name as name, caller.file_path as file_path, caller.code as code
+                MATCH (caller)<-[:CONTAINS]-(caller_file:File)
+                RETURN caller.name as name, caller.file_path as file_path, caller.code as code,
+                       caller_file.path as real_path
                 LIMIT 10
                 """
                 
                 # 准备查询参数
-                params = {"function_name": function_name}
-                if self.project_id:
-                    params["project_id"] = self.project_id
+                params = {
+                    "function_name": function_name
+                }
                 
-                result = session.run(query, **params)
+                result = session.run(query, params)
                 
                 callers = []
                 for record in result:
                     callers.append({
                         "name": record["name"],
-                        "file_path": record["file_path"],
+                        "file_path": record.get("real_path") or record["file_path"],
                         "code": record["code"]
                     })
                     
@@ -2053,32 +2055,27 @@ class Neo4jGraphStore(IGraphStore):
         
         try:
             with self.driver.session() as session:
-                # 构建查询语句，如果有project_id则添加过滤条件
+                # 使用简单直接的查询语法
                 query = """
                 MATCH (caller:Function {name: $function_name})-[:CALLS]->(callee:Function)
-                """
-                
-                # 添加project_id过滤条件
-                if self.project_id:
-                    query += " WHERE caller.project_id = $project_id AND callee.project_id = $project_id"
-                
-                query += """
-                RETURN callee.name as name, callee.file_path as file_path, callee.code as code
+                MATCH (callee)<-[:CONTAINS]-(callee_file:File)
+                RETURN callee.name as name, callee.file_path as file_path, callee.code as code,
+                       callee_file.path as real_path
                 LIMIT 10
                 """
                 
                 # 准备查询参数
-                params = {"function_name": function_name}
-                if self.project_id:
-                    params["project_id"] = self.project_id
+                params = {
+                    "function_name": function_name
+                }
                 
-                result = session.run(query, **params)
+                result = session.run(query, params)
                 
                 callees = []
                 for record in result:
                     callees.append({
                         "name": record["name"],
-                        "file_path": record["file_path"],
+                        "file_path": record.get("real_path") or record["file_path"],
                         "code": record["code"]
                     })
                     

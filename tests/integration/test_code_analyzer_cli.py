@@ -147,6 +147,25 @@ class TestCodeAnalyzerCLI:
         captured = capsys.readouterr()
         assert "代码问答会话" in captured.out
         assert "exit" not in captured.err
+        
+    def test_query_with_direct_query(self, test_project, monkeypatch, capsys):
+        """测试非交互式查询功能"""
+        # 使用--query参数直接执行查询
+        monkeypatch.setattr(sys, "argv", [
+            "code-learner", "query", "--project", str(test_project),
+            "--query", "what does main function do"
+        ])
+        
+        try:
+            main()
+        except Exception:
+            # 可能因为缺少外部服务而抛异常，但我们只关心非交互式查询是否启动
+            pass
+        
+        captured = capsys.readouterr()
+        assert "代码问答会话" in captured.out
+        assert "查询: what does main function do" in captured.out
+        assert "处理中..." in captured.out
     
     def test_export_command(self, test_project, tmp_path, monkeypatch, capsys):
         """测试export命令 (导出分析结果)"""

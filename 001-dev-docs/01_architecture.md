@@ -704,33 +704,47 @@ openrouter:
 ### 5.1 Neo4j图数据库模式
 
 ```cypher
-// 节点类型
-CREATE CONSTRAINT function_name_unique IF NOT EXISTS FOR (f:Function) REQUIRE f.name IS UNIQUE;
-CREATE CONSTRAINT file_path_unique IF NOT EXISTS FOR (f:File) REQUIRE f.path IS UNIQUE;
+// 节点类型 (Node Labels)
+// 约束确保在同一个项目中，文件路径和函数（名称+文件路径）是唯一的
+CREATE CONSTRAINT file_path_project_unique IF NOT EXISTS FOR (f:File) REQUIRE (f.path, f.project_id) IS UNIQUE;
+CREATE CONSTRAINT function_name_file_project_unique IF NOT EXISTS FOR (f:Function) REQUIRE (f.name, f.file_path, f.project_id) IS UNIQUE;
+CREATE CONSTRAINT module_name_project_unique IF NOT EXISTS FOR (m:Module) REQUIRE (m.name, m.project_id) IS UNIQUE;
 
-// 函数节点
-(:Function {
-  name: string,
-  code: string,
-  start_line: int,
-  end_line: int,
-  file_path: string,
-  parameters: [string],
-  return_type: string
-})
-
-// 文件节点
+// 文件节点 (File Node)
 (:File {
-  path: string,
-  name: string,
-  size: int,
-  last_modified: datetime
+  path: string,          // 文件的绝对或相对路径 (唯一)
+  name: string,          // 文件名
+  language: string,      // 编程语言 (e.g., 'c')
+  size: int,             // 文件大小 (字节)
+  last_modified: datetime, // 最后修改时间
+  project_id: string     // 项目ID，用于数据隔离
 })
 
-// 关系类型
-(:Function)-[:CALLS]->(:Function)
-(:Function)-[:DEFINED_IN]->(:File)
-(:File)-[:INCLUDES]->(:File)
+// 函数节点 (Function Node)
+(:Function {
+  name: string,          // 函数名
+  file_path: string,     // 所属文件的路径
+  code: string,          // 函数的完整源代码
+  start_line: int,       // 在文件中的起始行号
+  end_line: int,         // 在文件中的结束行号
+  parameters: [string],  // 参数列表
+  return_type: string,   // 返回类型
+  docstring: string,     // 函数注释
+  project_id: string     // 项目ID
+})
+
+// 模块/目录节点 (Module Node)
+(:Module {
+  name: string,          // 模块/目录的路径
+  project_id: string     // 项目ID
+})
+
+// 关系类型 (Relationship Types)
+(:File)-[:CONTAINS]->(:Function)       // 文件包含函数
+(:Function)-[:CALLS]->(:Function)     // 函数调用函数
+(:File)-[:DEPENDS_ON]->(:File)        // 文件依赖另一个文件 (e.g., #include)
+(:Module)-[:DEPENDS_ON]->(:Module)    // 模块依赖另一个模块
+(:File)-[:BELONGS_TO]->(:Module)      // 文件属于一个模块
 ```
 
 ### 5.2 Chroma向量数据库设计

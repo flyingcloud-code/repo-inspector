@@ -49,8 +49,10 @@ openrouter:
 # 增强查询配置
 enhanced_query:
   enabled: true
-  final_top_k: 5
   rerank_enabled: true
+  final_top_k: 8
+  parallel_retrieval: true
+  timeout_seconds: 30
   sources:
     vector:
       enabled: true

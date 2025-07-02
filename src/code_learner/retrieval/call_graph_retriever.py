@@ -57,9 +57,18 @@ class CallGraphContextRetriever(IContextRetriever):
         try:
             context_items = []
             
+            # 兼容处理：意图分析可能是IntentAnalysis对象或字典
+            if hasattr(intent_analysis, 'has_function_names'):
+                # 是IntentAnalysis对象
+                has_functions = intent_analysis.has_function_names()
+                function_names = intent_analysis.get_function_names() if has_functions else []
+            else:
+                # 是字典
+                function_names = intent_analysis.get("functions", [])
+                has_functions = bool(function_names)
+            
             # 如果意图分析包含函数名，检索函数调用关系
-            if intent_analysis.has_function_names():
-                function_names = intent_analysis.get_function_names()
+            if has_functions:
                 for function_name in function_names:
                     context_items.extend(
                         self._retrieve_by_function_name(function_name, config)
@@ -96,7 +105,7 @@ class CallGraphContextRetriever(IContextRetriever):
             )
     
     def _retrieve_by_function_name(self, function_name: str, config: RetrievalConfig) -> List[ContextItem]:
-        """根据函数名检索相关的调用关系
+        """根据函数名检索函数调用关系
         
         Args:
             function_name: 函数名
@@ -107,12 +116,109 @@ class CallGraphContextRetriever(IContextRetriever):
         """
         logger.info(f"根据函数名检索调用关系: {function_name}")
         
+        start_time = time.time()
+        
         try:
-            # 获取函数节点
-            function_node = self.graph_store.get_function_by_name(function_name)
+            # 1. 先查询函数节点的所有属性，了解其结构
+            structure_query = """
+                MATCH (f:Function {name: $function_name})<-[:CONTAINS]-(file:File)
+                WHERE f.project_id = $project_id
+                RETURN f, file.name AS file_name, file.path AS file_path
+                LIMIT 1
+                """
+            
+            structure_params = {
+                "function_name": function_name,
+                "project_id": self.graph_store.project_id
+            }
+            
+            logger.info(f"执行Neo4j结构查询: {structure_query}")
+            logger.info(f"查询参数: {structure_params}")
+            
+            structure_result = self.graph_store.query(structure_query, structure_params)
+            
+            # 获取结果并记录
+            function_node = None
+            file_info = None
+            for record in structure_result:
+                if 'f' in record:
+                    function_node = record['f']
+                    logger.info(f"函数节点结构: {dict(function_node)}")
+                    
+                    # 获取文件信息
+                    file_info = {
+                        'file_name': record.get('file_name', ''),
+                        'file_path': record.get('file_path', '')
+                    }
+                    logger.info(f"文件信息: {file_info}")
+                    break
+            
             if not function_node:
-                logger.warning(f"函数不存在: {function_name}")
-                return []
+                logger.warning(f"未找到函数: {function_name}")
+                
+                # 尝试使用模糊匹配
+                logger.info(f"尝试使用模糊匹配查找函数: {function_name}")
+                fuzzy_query = """
+                    MATCH (n:Function)
+                    WHERE n.project_id = $project_id AND n.name CONTAINS $function_name
+                    RETURN n
+                    LIMIT 5
+                    """
+                fuzzy_result = self.graph_store.query(fuzzy_query, structure_params)
+                
+                # 记录模糊匹配结果
+                fuzzy_nodes = []
+                for record in fuzzy_result:
+                    if 'n' in record:
+                        fuzzy_nodes.append(dict(record['n']))
+                
+                logger.info(f"模糊匹配结果: {fuzzy_nodes}")
+                
+                if not fuzzy_nodes:
+                    logger.warning(f"模糊匹配也未找到函数: {function_name}")
+                    return []
+                
+                # 使用第一个模糊匹配结果
+                function_node = fuzzy_nodes[0]
+            
+            # 构建上下文项
+            context_items = []
+            
+            # 使用函数节点和文件信息构建上下文
+            if function_node:
+                # 尝试获取代码内容
+                code = function_node.get('code', '')
+                if not code:
+                    code = function_node.get('code_context', '')
+                if not code and 'start_line' in function_node and 'end_line' in function_node:
+                    # 尝试从文件读取代码
+                    try:
+                        file_path = file_info['file_path'] if file_info else function_node.get('file_path', '')
+                        start_line = function_node['start_line']
+                        end_line = function_node['end_line']
+                        logger.info(f"尝试从文件读取代码: {file_path}, 行 {start_line}-{end_line}")
+                        code = self._read_function_from_file(file_path, start_line, end_line)
+                    except Exception as e:
+                        logger.error(f"从文件读取代码失败: {e}")
+                
+                # 构建函数定义上下文项
+                function_content = f"// Function: {function_name}\n"
+                if file_info and file_info['file_path']:
+                    function_content += f"// File: {file_info['file_path']}\n"
+                elif function_node.get('file_path', ''):
+                    function_content += f"// File: {function_node['file_path']}\n"
+                function_content += code
+                
+                context_items.append(ContextItem(
+                    content=function_content,
+                    source_type=self.source_type,
+                    relevance_score=1.0,
+                    metadata={
+                        "function_name": function_name,
+                        "file_path": function_node.get('file_path', ''),
+                        "relation_type": "definition"
+                    }
+                ))
             
             # 获取调用该函数的函数
             callers = self.graph_store.get_function_callers(function_name)
@@ -120,51 +226,40 @@ class CallGraphContextRetriever(IContextRetriever):
             # 获取该函数调用的函数
             callees = self.graph_store.get_function_callees(function_name)
             
-            # 构建上下文项
-            context_items = []
-            
-            # 添加函数本身的定义
-            if function_node.get("code"):
+            # 添加调用者
+            if callers:
+                callers_content = f"// Functions that call {function_name}:\n"
+                for caller in callers:
+                    callers_content += f"// - {caller['name']} (in {caller.get('file_path', '')})\n"
+                
                 context_items.append(ContextItem(
-                    content=function_node["code"],
+                    content=callers_content,
                     source_type=self.source_type,
-                    relevance_score=1.0,
+                    relevance_score=0.8,
                     metadata={
                         "function_name": function_name,
-                        "file_path": function_node.get("file_path", ""),
-                        "relation_type": "definition"
+                        "relation_type": "callers"
                     }
                 ))
             
-            # 添加调用者
-            for caller in callers[:config.top_k // 2]:
-                if caller.get("code"):
-                    context_items.append(ContextItem(
-                        content=caller["code"],
-                        source_type=self.source_type,
-                        relevance_score=0.8,
-                        metadata={
-                            "function_name": caller.get("name", ""),
-                            "file_path": caller.get("file_path", ""),
-                            "relation_type": "caller"
-                        }
-                    ))
-            
             # 添加被调用者
-            for callee in callees[:config.top_k // 2]:
-                if callee.get("code"):
-                    context_items.append(ContextItem(
-                        content=callee["code"],
-                        source_type=self.source_type,
-                        relevance_score=0.7,
-                        metadata={
-                            "function_name": callee.get("name", ""),
-                            "file_path": callee.get("file_path", ""),
-                            "relation_type": "callee"
-                        }
-                    ))
+            if callees:
+                callees_content = f"// Functions called by {function_name}:\n"
+                for callee in callees:
+                    callees_content += f"// - {callee['name']} (in {callee.get('file_path', '')})\n"
+                
+                context_items.append(ContextItem(
+                    content=callees_content,
+                    source_type=self.source_type,
+                    relevance_score=0.8,
+                    metadata={
+                        "function_name": function_name,
+                        "relation_type": "callees"
+                    }
+                ))
             
-            return context_items[:config.top_k]
+            logger.info(f"Call graph retrieval completed: {len(context_items)} items in {time.time() - start_time:.3f}s")
+            return context_items
             
         except Exception as e:
             logger.error(f"检索函数调用关系失败: {e}")
@@ -173,7 +268,7 @@ class CallGraphContextRetriever(IContextRetriever):
     def _retrieve_by_fuzzy_match(
         self, 
         query: str, 
-        intent_analysis: IntentAnalysis, 
+        intent_analysis: IntentAnalysis | Dict[str, Any], 
         config: RetrievalConfig
     ) -> List[ContextItem]:
         """基于模糊匹配检索调用关系
@@ -192,7 +287,12 @@ class CallGraphContextRetriever(IContextRetriever):
         
         try:
             # 使用关键词搜索相关函数
-            keywords = intent_analysis.keywords if intent_analysis.keywords else [query]
+            if hasattr(intent_analysis, 'keywords'):
+                # IntentAnalysis对象
+                keywords = intent_analysis.keywords if intent_analysis.keywords else [query]
+            else:
+                # 字典
+                keywords = intent_analysis.get("keywords", []) or [query]
             
             for keyword in keywords:
                 # 在Neo4j中搜索包含关键词的函数
@@ -369,4 +469,39 @@ class CallGraphContextRetriever(IContextRetriever):
                 "source_type": self.get_source_type(),
                 "available": False,
                 "error": str(e)
-            } 
+            }
+    
+    def _read_function_from_file(self, file_path: str, start_line: int, end_line: int) -> str:
+        """从文件中读取函数代码
+        
+        Args:
+            file_path: 文件路径
+            start_line: 起始行
+            end_line: 结束行
+            
+        Returns:
+            函数代码
+        """
+        try:
+            # 检查文件是否存在
+            import os
+            if not os.path.exists(file_path):
+                logger.warning(f"文件不存在: {file_path}")
+                return ""
+            
+            # 读取文件内容
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # 检查行号是否有效
+            if start_line < 1 or end_line > len(lines) or start_line > end_line:
+                logger.warning(f"行号无效: {start_line}-{end_line}, 文件行数: {len(lines)}")
+                return ""
+            
+            # 提取函数代码
+            function_code = ''.join(lines[start_line-1:end_line])
+            return function_code
+            
+        except Exception as e:
+            logger.error(f"读取函数代码失败: {e}")
+            return "" 

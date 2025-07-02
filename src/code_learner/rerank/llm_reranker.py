@@ -64,6 +64,8 @@ class LLMReranker(IReranker):
         Returns:
             重排序结果
         """
+        logger.info(f"LLM重排序开始，输入项目数: {len(context_items)}，目标top_k: {top_k}")
+        
         start_time = time.time()
         original_count = len(context_items)
         
@@ -93,7 +95,7 @@ class LLMReranker(IReranker):
             rerank_time = time.time() - start_time
             confidence = self._calculate_confidence(llm_response, ranked_indices)
             
-            logger.info(f"LLM reranking completed: {len(reranked_items)} items in {rerank_time:.3f}s")
+            logger.info(f"LLM reranking completed: {len(reranked_items)}/{top_k} items in {rerank_time:.3f}s")
             
             return RerankResult(
                 items=reranked_items,
