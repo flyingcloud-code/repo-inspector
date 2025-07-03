@@ -268,26 +268,79 @@ class Neo4jGraphStore(IGraphStore):
 
         # 批量创建函数调用关系
         if parsed_code.call_relationships:
-            call_relationship_query = """
-            UNWIND $calls AS call
-            MATCH (caller:Function {name: call.caller_name, file_path: call.file_path, project_id: $project_id})
-            MATCH (callee:Function {name: call.callee_name, project_id: $project_id})
-            MERGE (caller)-[r:CALLS]->(callee)
-            ON CREATE SET r.line = call.line_number, r.context = call.context, r.last_updated = datetime()
-            """
+            logger.info(f"🔍 [DEBUG] 发现 {len(parsed_code.call_relationships)} 个函数调用关系")
             
             calls_data = [
                 {
                     "caller_name": call.caller_name,
                     "callee_name": call.callee_name,
                     "file_path": call.file_path,
+                    "call_type": call.call_type,
                     "line_number": call.line_number,
                     "context": call.context
-                } for call in parsed_code.call_relationships
+                }
+                for call in parsed_code.call_relationships
             ]
             
-            tx.run(call_relationship_query, calls=calls_data, project_id=self.project_id)
-        
+            logger.info(f"🔍 [DEBUG] 调用关系数据样例: {calls_data[:3] if calls_data else '无数据'}")
+            
+            # 先检查调用者函数是否存在
+            caller_check_query = """
+            UNWIND $calls AS call
+            MATCH (caller:Function {name: call.caller_name, file_path: call.file_path, project_id: $project_id})
+            RETURN call.caller_name AS caller_name, count(caller) AS caller_found
+            """
+            
+            caller_result = tx.run(caller_check_query, {
+                'calls': calls_data,
+                'project_id': self.project_id
+            })
+            
+            caller_results = [dict(record) for record in caller_result]
+            logger.info(f"🔍 [DEBUG] 调用者函数匹配结果: {caller_results[:5]}")
+            
+            # 检查被调用者函数是否存在
+            callee_check_query = """
+            UNWIND $calls AS call
+            OPTIONAL MATCH (callee:Function {name: call.callee_name, project_id: $project_id})
+            RETURN call.callee_name AS callee_name, count(callee) AS callee_found
+            """
+            
+            callee_result = tx.run(callee_check_query, {
+                'calls': calls_data,
+                'project_id': self.project_id
+            })
+            
+            callee_results = [dict(record) for record in callee_result]
+            logger.info(f"🔍 [DEBUG] 被调用者函数匹配结果: {callee_results[:5]}")
+            
+            call_creation_query = """
+            UNWIND $calls AS call
+            MATCH (caller:Function {name: call.caller_name, file_path: call.file_path, project_id: $project_id})
+            MATCH (callee:Function {name: call.callee_name, project_id: $project_id})
+            MERGE (caller)-[r:CALLS]->(callee)
+            SET r.call_type = call.call_type,
+                r.line_number = call.line_number,
+                r.context = call.context,
+                r.last_updated = datetime()
+            RETURN count(r) AS relationships_created
+            """
+            
+            call_result = tx.run(call_creation_query, {
+                'calls': calls_data,
+                'project_id': self.project_id
+            })
+            
+            # 获取创建结果
+            result_records = [dict(record) for record in call_result]
+            if result_records:
+                relationships_created = result_records[0].get("relationships_created", 0)
+                logger.info(f"✅ [DEBUG] 成功创建 {relationships_created} 个CALLS关系")
+            else:
+                logger.warning("⚠️ [DEBUG] 调用关系创建查询没有返回结果")
+        else:
+            logger.warning(f"⚠️ [DEBUG] 文件 {file_path} 没有发现任何函数调用关系")
+
         logger.info(f"✅ Successfully processed {len(parsed_code.functions)} functions and {len(parsed_code.call_relationships)} calls from {file_path} in transaction.")
         return True
 
