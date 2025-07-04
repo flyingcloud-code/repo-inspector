@@ -31,6 +31,7 @@ class LLMReranker(IReranker):
     
     def __init__(self):
         """Initializes the LLMReranker."""
+        self.logger = logging.getLogger(__name__)
         self.config = ConfigManager()
         self.chatbot = OpenRouterChatBot()
         self.prompt_template = TEMPLATES.get("rerank_default", "")
@@ -61,7 +62,18 @@ class LLMReranker(IReranker):
         )
 
         try:
-            response_str = self.chatbot.ask(prompt)
+            self.logger.info(f"Reranking {len(items)} items for query: '{query}'")
+            
+            # 使用 ask_question 方法并获取响应内容
+            response = self.chatbot.ask_question(prompt)
+            response_str = response.content if hasattr(response, 'content') else str(response)
+            
+            if not response_str or not isinstance(response_str, str):
+                self.logger.warning("LLM reranker returned an empty or invalid response.")
+                return items
+
+            self.logger.info("Successfully received reranking response from LLM.")
+            
             ranked_indices = self._parse_llm_response(response_str, len(items))
 
             # Reorder items based on the LLM's ranking

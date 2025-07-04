@@ -26,14 +26,14 @@ class MultiSourceContextBuilder:
     3. LLM重排序
     """
     
-    def __init__(self, reranker: IReranker):
+    def __init__(self, project_id: str, reranker: IReranker):
         """初始化多源构建器"""
         self.config = ConfigManager()
         self.reranker = reranker
         
-        # 简单初始化两个检索器
-        self.vector_retriever = VectorContextRetriever()
-        self.graph_retriever = GraphContextRetriever()
+        # 简单初始化两个检索器，并传入项目ID
+        self.vector_retriever = VectorContextRetriever(project_id=project_id)
+        self.graph_retriever = GraphContextRetriever(project_id=project_id)
         
         logger.info("MultiSourceContextBuilder initialized (simple version)")
         

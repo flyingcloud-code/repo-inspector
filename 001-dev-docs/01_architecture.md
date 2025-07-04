@@ -162,7 +162,7 @@ class IContextRetriever(ABC):
     @abstractmethod
     def get_source_type(self) -> str:
         pass
-    
+
     @abstractmethod
     def is_available(self) -> bool:
         pass
@@ -172,7 +172,7 @@ class IReranker(ABC):
     @abstractmethod
     def rerank(self, query: str, items: List[ContextItem], top_k: int) -> List[ContextItem]:
         pass
-    
+
     @abstractmethod
     def is_available(self) -> bool:
         pass

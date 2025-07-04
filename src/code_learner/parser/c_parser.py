@@ -39,6 +39,16 @@ class CParser(IParser):
         except Exception as e:
             raise ParseError("", f"Failed to initialize C parser: {e}")
     
+    def _get_func_name_from_declarator(self, declarator_node: Any) -> Optional[str]:
+        """递归地从一个声明节点中找到最终的函数名标识符。"""
+        if not declarator_node:
+            return None
+        if declarator_node.type == 'identifier':
+            return declarator_node.text.decode('utf-8')
+        
+        nested_declarator = declarator_node.child_by_field_name('declarator')
+        return self._get_func_name_from_declarator(nested_declarator)
+
     def parse_file(self, file_path: Path) -> ParsedCode:
         """
         解析单个C文件
@@ -101,32 +111,22 @@ class CParser(IParser):
         return results
     
     def extract_functions(self, source_code: str, file_path: str) -> List[Function]:
-        """
+        """从源代码中提取函数信息，包括调用关系
+        
         从源代码中提取函数信息，包括返回类型、参数和注释。
         此版本使用递归辅助函数，更健壮，可以处理更多C语言语法变体。
         """
         functions = []
         tree = self.parser.parse(bytes(source_code, 'utf-8'))
-
-        query = self.language.query("(function_definition) @func")
-        captures = query.captures(tree.root_node)
-
-        def get_func_name(declarator_node):
-            """递归地从一个声明节点中找到最终的函数名标识符。"""
-            if not declarator_node:
-                return None
-            if declarator_node.type == 'identifier':
-                return declarator_node.text.decode('utf-8')
             
-            nested_declarator = declarator_node.child_by_field_name('declarator')
-            return get_func_name(nested_declarator)
+        query = self.language.query("(function_definition) @func")
 
-        for node, name in captures:
+        for node, name in query.captures(tree.root_node):
             if name == "func":
                 declarator_node = node.child_by_field_name('declarator')
                 type_node = node.child_by_field_name('type')
 
-                func_name = get_func_name(declarator_node)
+                func_name = self._get_func_name_from_declarator(declarator_node)
                 parameters = []
                 
                 if declarator_node:
@@ -196,11 +196,10 @@ class CParser(IParser):
             temp = node
             while temp:
                 if temp.type == 'function_definition':
-                    name_node = temp.child_by_field_name('declarator').child_by_field_name('declarator')
-                    if name_node:
-                        return name_node.text.decode('utf-8')
+                    declarator_node = temp.child_by_field_name('declarator')
+                    return self._get_func_name_from_declarator(declarator_node)
                 temp = temp.parent
-                return None
+            return None
 
         for node, name in captures:
             caller_name = find_enclosing_function(node)

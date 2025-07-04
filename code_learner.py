@@ -318,22 +318,19 @@ class MainCLI:
     
     def _handle_project_command(self, args: argparse.Namespace) -> int:
         """处理项目管理命令"""
-        project_commands = ProjectCommands()
-        
+        cmd = ProjectCommands()
         if args.project_command == 'create':
-            return project_commands.create_project(args.path, args.name)
+            return cmd.create_project(args)
         elif args.project_command == 'list':
-            return project_commands.list_projects()
+            return cmd.list_projects(args)
         elif args.project_command == 'delete':
-            return project_commands.delete_project(args.name_or_id, args.force)
-        else:
-            logger.error("项目命令需要指定操作: create, list, delete")
-            return 1
+            return cmd.delete_project(args)
+        return 1
     
     def _handle_analyze_command(self, args: argparse.Namespace) -> int:
         """处理分析命令"""
-        analyze_commands = AnalyzeCommands()
-        return analyze_commands.analyze_project(
+        cmd = AnalyzeCommands()
+        return cmd.analyze_project(
             project_name_or_id=args.project,
             incremental=args.incremental,
             include_pattern=args.include,
@@ -344,14 +341,8 @@ class MainCLI:
     
     def _handle_query_command(self, args: argparse.Namespace) -> int:
         """处理查询命令"""
-        query_commands = QueryCommands()
-        return query_commands.query_project(
-            project_name_or_id=args.project,
-            direct_query=args.query,
-            history_file=args.history,
-            focus_function=args.function,
-            focus_file=args.file
-        )
+        cmd = QueryCommands()
+        return cmd.run_query(args)
     
     def _handle_call_graph_command(self, args: argparse.Namespace) -> int:
         """处理调用图命令"""

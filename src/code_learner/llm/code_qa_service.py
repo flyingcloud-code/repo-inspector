@@ -26,23 +26,22 @@ class CodeQAService:
     结合Neo4j图数据库和Chroma向量数据库，提供智能的代码问答功能
     """
     
-    def __init__(self):
+    def __init__(self, project_id: str):
         from ..retrieval.multi_source_builder import MultiSourceContextBuilder
 
         self.config = ConfigManager()
         self.chatbot = OpenRouterChatBot()
         self.intent_analyzer = IntentAnalyzer(self.chatbot)
         self.reranker = LLMReranker()
-        self.context_builder = MultiSourceContextBuilder(reranker=self.reranker)
+        self.context_builder = MultiSourceContextBuilder(project_id=project_id, reranker=self.reranker)
         self.logger = get_logger(__name__)
-        self.logger.info("CodeQAService initialized.")
+        self.logger.info(f"CodeQAService initialized for project {project_id}.")
     
-    def ask_question(self, question: str, project_id: str) -> Dict[str, Any]:
+    def ask_question(self, question: str) -> Dict[str, Any]:
         """询问代码相关问题
         
         Args:
             question: 用户问题
-            project_id: 项目ID，用于项目隔离
             
         Returns:
             Dict[str, Any]: 回答内容
@@ -124,17 +123,16 @@ class CodeQAService:
             
             # 执行多源检索
             rerank_result = self.context_builder.build_context(
-                query=question, 
-                intent_analysis=intent_analysis,
-                config={"final_top_k": final_top_k}
+                query=question,
+                intent=intent_analysis
             )
             
             # 将结果格式化为字符串
-            if rerank_result and hasattr(rerank_result, 'items') and rerank_result.items:
+            if rerank_result:
                 code_context += "## 多源检索结果\n\n"
-                self.logger.info(f"多源检索找到 {len(rerank_result.items)} 个相关代码片段，置信度: {rerank_result.confidence:.3f}")
+                self.logger.info(f"多源检索找到 {len(rerank_result)} 个相关代码片段")
                 
-                for i, item in enumerate(rerank_result.items):
+                for i, item in enumerate(rerank_result):
                     # 添加分隔符
                     if i > 0:
                         code_context += "\n---\n\n"
@@ -144,7 +142,7 @@ class CodeQAService:
                     file_path = metadata.get("file_path", "Unknown")
                     function_name = metadata.get("function_name", "")
                     relation_type = metadata.get("relation_type", "")
-                    source_type = item.source_type.value if hasattr(item.source_type, 'value') else str(item.source_type)
+                    source_info = item.source  # 直接使用source字符串
                     
                     # 构建标题
                     title = f"### 代码片段 {i+1}"
@@ -155,7 +153,7 @@ class CodeQAService:
                     
                     code_context += f"{title}\n"
                     code_context += f"文件: {file_path}\n"
-                    code_context += f"来源: {source_type}, 相关度: {item.relevance_score:.3f}\n\n"
+                    code_context += f"来源: {source_info}, 相关度: {item.score:.3f}\n\n"
                     
                     # 添加代码内容
                     if item.content.strip().startswith("```") or item.content.strip().endswith("```"):
@@ -196,33 +194,16 @@ class CodeQAService:
         self.logger.info(f"向量检索查询: {question}")
         
         try:
-            # 确保向量存储已初始化
-            if not self.context_builder.vector_retriever or not self.context_builder.embedding_engine:
-                self.logger.warning("向量存储或嵌入引擎未初始化")
+            # 确保向量检索器可用
+            if not self.context_builder.vector_retriever or not self.context_builder.vector_retriever.is_available():
+                self.logger.warning("向量检索器未初始化或不可用")
                 return ""
-            
-            # 构建多个搜索查询
-            search_queries = self._build_search_queries(question, intent_analysis)
-            
-            # 存储所有结果
-            all_results = []
-            
-            # 对每个查询执行向量检索
-            for query in search_queries:
-                results = self.context_builder.vector_retriever.similarity_search(
-                    query=query,
-                    top_k=top_k,
-                    embedding_engine=self.context_builder.embedding_engine
-                )
-                
-                if results:
-                    all_results.extend(results)
-            
-            # 去重
-            unique_results = self._deduplicate_results(all_results)
+
+            # 使用向量检索器进行检索
+            results = self.context_builder.vector_retriever.retrieve(question, intent_analysis)
             
             # 限制结果数量
-            unique_results = unique_results[:top_k]
+            unique_results = results[:top_k]
             
             self.logger.info(f"向量检索找到 {len(unique_results)} 个相关代码片段")
             
@@ -230,15 +211,15 @@ class CodeQAService:
             if not unique_results:
                 return ""
             
-            context = "## 向量检索结果\n\n"
+            context = "## 向量检索结果 (备用方案)\n\n"
             
-            for i, result in enumerate(unique_results):
+            for i, item in enumerate(unique_results):
                 # 添加分隔符
                 if i > 0:
                     context += "\n---\n\n"
                 
                 # 提取元数据
-                metadata = result.get("metadata", {})
+                metadata = item.metadata or {}
                 file_path = metadata.get("file_path", "未知文件")
                 function_name = metadata.get("function_name", "")
                 
@@ -248,11 +229,14 @@ class CodeQAService:
                     title += f": 函数 `{function_name}`"
                 
                 context += f"{title}\n"
-                context += f"文件: {file_path}\n\n"
+                context += f"文件: {file_path}\n"
+                context += f"来源: {item.source}, 相关度: {item.score:.3f}\n\n"
                 
                 # 添加代码内容
-                content = result.get("document", "") or result.get("content", "")
-                context += f"```c\n{content}\n```\n"
+                if item.content.strip().startswith("```") or item.content.strip().endswith("```"):
+                    context += f"{item.content}\n"
+                else:
+                    context += f"```c\n{item.content}\n```\n"
             
             return context
             

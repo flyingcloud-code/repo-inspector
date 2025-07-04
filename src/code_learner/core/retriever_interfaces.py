@@ -84,10 +84,10 @@ class IIntentAnalyzer(ABC):
     def analyze(self, query: str) -> IntentAnalysis:
         """
         Analyzes the user query to determine intent and extract entities.
-
+        
         Args:
             query: The user's natural language query.
-
+            
         Returns:
             An IntentAnalysis object containing structured information about the query.
         """

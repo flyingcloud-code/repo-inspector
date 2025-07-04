@@ -9,6 +9,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Optional
+import argparse
 
 from ..project.project_registry import ProjectRegistry
 from ..llm.code_qa_service import CodeQAService
@@ -23,244 +24,82 @@ class QueryCommands:
         """初始化查询命令处理器"""
         self.registry = ProjectRegistry()
     
-    def query_project(self, project_name_or_id: str, direct_query: Optional[str] = None,
-                     history_file: Optional[str] = None, focus_function: Optional[str] = None,
-                     focus_file: Optional[str] = None) -> int:
-        """
-        查询项目代码
+    def run_query(self, args: argparse.Namespace) -> int:
+        """执行查询"""
+        project_name_or_id = args.project
+        query = args.query
+
+        project_info = self.registry.find_project(project_name_or_id)
+        if not project_info:
+            print(f"❌ 错误: 项目 '{project_name_or_id}' 未找到。")
+            return 1
+
+        project_id = project_info['id']
+        project_name = project_info['name']
         
-        Args:
-            project_name_or_id: 项目名称或ID
-            direct_query: 直接执行的查询（不进入交互模式）
-            history_file: 历史记录文件路径
-            focus_function: 聚焦的函数
-            focus_file: 聚焦的文件
-            
-        Returns:
-            int: 退出码（0表示成功）
-        """
-        try:
-            # 查找项目
-            project_info = self.registry.find_project(project_name_or_id)
-            if not project_info:
-                print(f"❌ 错误: 项目 '{project_name_or_id}' 不存在")
-                print("💡 使用 'code-learner project list' 查看所有项目")
-                return 1
-            
-            project_path = project_info['path']
-            project_name = project_info['name']
-            project_id = project_info['id']
-            
-            # 初始化问答服务
-            qa_service = CodeQAService()
-            
-            # 构建焦点信息
-            focus_info = ""
-            if focus_function:
-                focus_info = f" (聚焦函数: {focus_function})"
-            elif focus_file:
-                focus_info = f" (聚焦文件: {focus_file})"
-            
-            # 如果提供了直接查询，执行单次查询
-            if direct_query:
-                return self._execute_direct_query(
-                    qa_service, project_info, direct_query, 
-                    history_file, focus_function, focus_file
-                )
-            else:
-                # 启动交互式会话
-                return self._start_interactive_session(
-                    qa_service, project_info, history_file, 
-                    focus_function, focus_file
-                )
+        # 使用项目ID正确初始化服务
+        qa_service = CodeQAService(project_id=project_id)
+
+        if query:
+            return self._run_single_query(qa_service, project_name, project_id, query)
+        else:
+            return self._run_interactive_query(qa_service, project_name, project_id)
+
+    def _run_single_query(self, qa_service: CodeQAService, project_name: str, project_id: str, query: str) -> int:
+        """运行单个查询"""
+        print(f"📝 查询项目: {project_name} ({project_id})")
+        print(f"❓ 问题: {query}")
+        print("🤔 处理中...\n")
+
+        result = qa_service.ask_question(query)
+
+        if "error" in result:
+            print(f"❌ 查询失败: {result['error']}")
+            return 1
+        
+        print(f"💡 回答:\n{result['answer']}")
+        return 0
+
+    def _run_interactive_query(self, qa_service: CodeQAService, project_name: str, project_id: str) -> int:
+        """运行交互式查询"""
+        print("🚀 进入交互式查询模式")
+        print(f"   项目: {project_name} ({project_id})")
+        
+        project_path = self.registry.find_project(project_id)['path']
+        print(f"   路径: {project_path}")
+
+        print("\n💡 输入 'exit' 或 'quit' 退出，输入 'help' 获取帮助")
+        print("=" * 50)
+
+        while True:
+            try:
+                user_query = input("\n❓ > ").strip()
+                if not user_query:
+                    continue
+                if user_query.lower() in ['exit', 'quit']:
+                    break
+                if user_query.lower() == 'help':
+                    print("这是一个交互式查询会话。直接输入您关于代码的问题即可。")
+                    continue
+
+                print("🤔 处理中...")
+                result = qa_service.ask_question(user_query)
+
+                if "error" in result:
+                    print(f"❌ 查询失败: {result['error']}")
+                else:
+                    print(f"💡 回答:\n{result['answer']}")
                 
-        except Exception as e:
-            logger.error(f"查询项目失败: {e}")
-            print(f"❌ 查询项目时出错: {e}")
-            return 1
-    
-    def _execute_direct_query(self, qa_service: CodeQAService, project_info: dict,
-                             query: str, history_file: Optional[str] = None,
-                             focus_function: Optional[str] = None,
-                             focus_file: Optional[str] = None) -> int:
-        """
-        执行直接查询模式
-        
-        Args:
-            qa_service: 问答服务
-            project_info: 项目信息
-            query: 查询问题
-            history_file: 历史记录文件
-            focus_function: 聚焦函数
-            focus_file: 聚焦文件
-            
-        Returns:
-            int: 退出码
-        """
-        try:
-            project_id = project_info['id']
-            project_name = project_info['name']
-            
-            print(f"📝 查询项目: {project_name} ({project_id})")
-            
-            if focus_function:
-                print(f"🎯 聚焦函数: {focus_function}")
-            elif focus_file:
-                print(f"🎯 聚焦文件: {focus_file}")
-            
-            print(f"❓ 问题: {query}")
-            print("🤔 处理中...")
-            print()
-            
-            # 执行查询
-            result = qa_service.ask_question(query, project_id)
-            
-            if "error" in result:
-                print(f"❌ 查询失败: {result['error']}")
-                return 1
-            
-            # 显示答案
-            answer = result.get("answer", "未获得回答")
-            print("💡 回答:")
-            print(answer)
-            print()
-            
-            # 保存到历史记录
-            if history_file:
-                self._save_to_history(history_file, query, answer)
-                print(f"📝 已保存到历史记录: {history_file}")
-            
-            return 0
-            
-        except Exception as e:
-            logger.error(f"执行直接查询失败: {e}")
-            print(f"❌ 执行查询时出错: {e}")
-            return 1
-    
-    def _start_interactive_session(self, qa_service: CodeQAService, project_info: dict,
-                                  history_file: Optional[str] = None,
-                                  focus_function: Optional[str] = None,
-                                  focus_file: Optional[str] = None) -> int:
-        """
-        启动交互式查询会话
-        
-        Args:
-            qa_service: 问答服务
-            project_info: 项目信息
-            history_file: 历史记录文件
-            focus_function: 聚焦函数
-            focus_file: 聚焦文件
-            
-        Returns:
-            int: 退出码
-        """
-        try:
-            project_id = project_info['id']
-            project_name = project_info['name']
-            project_path = project_info['path']
-            
-            # 加载历史记录
-            history = []
-            if history_file and os.path.exists(history_file):
-                try:
-                    with open(history_file, "r", encoding="utf-8") as f:
-                        history = json.load(f)
-                except Exception as e:
-                    logger.warning(f"无法加载历史记录: {e}")
-            
-            # 显示会话信息
-            print(f"🚀 进入交互式查询模式")
-            print(f"   项目: {project_name} ({project_id})")
-            print(f"   路径: {project_path}")
-            
-            if focus_function:
-                print(f"   聚焦函数: {focus_function}")
-            elif focus_file:
-                print(f"   聚焦文件: {focus_file}")
-            
-            if history_file:
-                print(f"   历史记录: {history_file}")
-            
-            print()
-            print("💡 输入 'exit' 或 'quit' 退出，输入 'help' 获取帮助")
-            print("=" * 50)
-            print()
-            
-            # 交互循环
-            while True:
-                try:
-                    # 获取用户输入
-                    question = input("❓ > ").strip()
-                    
-                    if not question:
-                        continue
-                    
-                    # 处理特殊命令
-                    if question.lower() in ['exit', 'quit', 'q']:
-                        print("👋 再见!")
-                        break
-                    elif question.lower() in ['help', 'h']:
-                        self._print_help()
-                        continue
-                    elif question.lower() == 'history':
-                        self._print_history(history)
-                        continue
-                    elif question.lower() == 'clear':
-                        os.system('clear' if os.name == 'posix' else 'cls')
-                        continue
-                    
-                    print("🤔 处理中...")
-                    
-                    # 执行查询
-                    result = qa_service.ask_question(question, project_id)
-                    
-                    if "error" in result:
-                        print(f"❌ 查询失败: {result['error']}")
-                        print()
-                        continue
-                    
-                    # 显示答案
-                    answer = result.get("answer", "未获得回答")
-                    print("💡 回答:")
-                    print(answer)
-                    print()
-                    print("-" * 50)
-                    print()
-                    
-                    # 保存到历史记录
-                    history.append({
-                        "question": question,
-                        "answer": answer,
-                        "timestamp": self._get_timestamp()
-                    })
-                    
-                except KeyboardInterrupt:
-                    print("\n👋 会话被中断，再见!")
-                    break
-                except EOFError:
-                    print("\n👋 再见!")
-                    break
-                except Exception as e:
-                    logger.error(f"处理查询失败: {e}")
-                    print(f"❌ 处理查询时出错: {e}")
-                    print()
-            
-            # 保存历史记录
-            if history_file and history:
-                try:
-                    os.makedirs(os.path.dirname(history_file), exist_ok=True)
-                    with open(history_file, "w", encoding="utf-8") as f:
-                        json.dump(history, f, ensure_ascii=False, indent=2)
-                    print(f"📝 历史记录已保存到: {history_file}")
-                except Exception as e:
-                    logger.warning(f"保存历史记录失败: {e}")
-            
-            return 0
-            
-        except Exception as e:
-            logger.error(f"交互式会话失败: {e}")
-            print(f"❌ 交互式会话出错: {e}")
-            return 1
+                print("-" * 50)
+
+            except KeyboardInterrupt:
+                print("\n操作已取消。")
+                break
+            except Exception as e:
+                logger.error(f"交互式查询出错: {e}", exc_info=True)
+                print(f"❌ 发生意外错误: {e}")
+
+        return 0
     
     def _print_help(self):
         """打印帮助信息"""

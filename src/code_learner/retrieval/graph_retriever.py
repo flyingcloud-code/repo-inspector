@@ -13,9 +13,17 @@ class GraphContextRetriever(IContextRetriever):
     Retrieves structured context from the Neo4j graph database.
     This single retriever handles various types of graph queries.
     """
-    def __init__(self):
+    def __init__(self, project_id: str):
+        """初始化GraphContextRetriever"""
+        self.logger = logging.getLogger(__name__)
         self.config = ConfigManager()
-        self.graph_store = Neo4jGraphStore()
+        config = self.config.get_config().database
+        self.graph_store = Neo4jGraphStore(
+            project_id=project_id,
+            uri=config.neo4j_uri,
+            user=config.neo4j_user,
+            password=config.neo4j_password
+        )
         logger.info("GraphContextRetriever initialized.")
 
     def get_source_type(self) -> SourceType:
@@ -28,37 +36,49 @@ class GraphContextRetriever(IContextRetriever):
 
     def retrieve(self, query: str, intent: Dict[str, Any]) -> List[ContextItem]:
         """
-        Retrieves context from the graph database based on the query intent.
+        Retrieves context from the graph database based on intent.
+        This simplified version runs queries sequentially for robustness.
         """
-        config = self.config.get_config()
-        retriever_top_k = config.enhanced_query.sources["call_graph"]["top_k"]
+        all_items: List[ContextItem] = []
+        function_names = intent.get("functions", [])
         
-        primary_entity = intent.get("primary_entity")
-        core_intent = intent.get("core_intent")
-        
-        if not primary_entity or intent.get("core_intent") == "general":
+        if not function_names:
+            self.logger.info("No function names in intent, GraphContextRetriever has nothing to do.")
             return []
 
-        context_items: List[ContextItem] = []
-        seen_items: Set[str] = set()
+        self.logger.info(f"Graph retriever processing functions: {function_names}")
 
-        try:
-            # The order determines priority
-            self._add_items(context_items, self._get_function_definition(primary_entity), seen_items)
-            self._add_items(context_items, self._get_function_callers(primary_entity), seen_items)
-            self._add_items(context_items, self._get_callees(primary_entity), seen_items)
-            self._add_items(context_items, self._get_file_dependencies(primary_entity), seen_items)
-        except Exception as e:
-            logger.error(f"Graph retrieval for entity '{primary_entity}' failed: {e}", exc_info=True)
+        for func_name in function_names:
+            # 1. Get function definition (most important)
+            definition = self._get_function_definition(func_name)
+            if definition:
+                self.logger.info(f"Found definition for '{func_name}'")
+                all_items.extend(definition)
 
-        return context_items[:retriever_top_k]
+            # 2. Get callees
+            callees = self._get_callees(func_name)
+            if callees:
+                self.logger.info(f"Found {len(callees)} callees for '{func_name}'")
+                all_items.extend(callees)
+            
+            # 3. Get callers
+            callers = self._get_function_callers(func_name)
+            if callers:
+                self.logger.info(f"Found {len(callers)} callers for '{func_name}'")
+                all_items.extend(callers)
 
-    def _add_items(self, all_items: List[ContextItem], new_items: List[ContextItem], seen: Set[str]):
-        """Helper to add unique items to the list."""
-        for item in new_items:
-            if item.content not in seen:
-                all_items.append(item)
-                seen.add(item.content)
+        # Deduplicate and return
+        seen_content = set()
+        deduplicated_items = []
+        for item in all_items:
+            # Simple content-based deduplication
+            if item.content not in seen_content:
+                deduplicated_items.append(item)
+                seen_content.add(item.content)
+        
+        self.logger.info(f"Graph retrieval found {len(deduplicated_items)} items for functions: {function_names}")
+        
+        return deduplicated_items
 
     def _get_function_definition(self, func_name: str) -> List[ContextItem]:
         query = """
@@ -128,4 +148,25 @@ class GraphContextRetriever(IContextRetriever):
                 score=0.8,
                 metadata=r
             ) for r in results
+        ]
+
+    def _query_and_convert(self, query: str, params: Dict[str, Any], source_description: str) -> List[ContextItem]:
+        """
+        Args:
+            query: Cypher查询语句
+            params: 查询参数
+            source_description: 描述来源的字符串 (e.g., "callers")
+        
+        Returns:
+            List[ContextItem]
+        """
+        results = self.graph_store.run_query(query, params)
+        return [
+            ContextItem(
+                content=item["content"],
+                source=f"graph_{source_description}",
+                score=1.0,  # 图数据库结果被认为是高相关的
+                metadata=item
+            )
+            for item in results if item.get("content")
         ] 

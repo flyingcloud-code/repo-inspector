@@ -2318,3 +2318,24 @@ class Neo4jGraphStore(IGraphStore):
         """
         results = self.run_query(query, {"file_path": file_path, "project_id": self.project_id, "docstring": docstring})
         return bool(results)
+
+    def is_available(self) -> bool:
+        """
+        Check if the Neo4j database is available and connected.
+        
+        Returns:
+            bool: True if the driver is initialized and a connection can be verified.
+        """
+        if not self.driver:
+            return False
+        try:
+            # Try to verify connectivity by getting server info
+            self.driver.verify_connectivity()
+            return True
+        except Exception as e:
+            logger.warning(f"Neo4j connectivity verification failed: {e}")
+            return False
+
+    def _ensure_constraints_and_indices(self):
+        """确保数据库中存在所有必需的约束和索引"""
+        # ... existing code ...

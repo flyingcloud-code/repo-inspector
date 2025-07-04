@@ -82,6 +82,13 @@ class PerformanceConfig:
 
 
 @dataclass
+class RetrievalConfig:
+    """检索配置"""
+    vector_store_top_k: int = 10  # 从向量存储中为每个子查询检索的文档数量
+    final_top_k: int = 5  # 经过重排序后最终提供给LLM的文档数量
+
+
+@dataclass
 class AppConfig:
     """应用配置"""
     name: str = "C语言智能代码分析调试工具"
@@ -102,6 +109,7 @@ class Config:
     parser: ParserConfig
     logging: LoggingConfig
     performance: PerformanceConfig
+    retrieval: RetrievalConfig
     app: AppConfig
     enhanced_query: EnhancedQueryConfig
     
@@ -121,6 +129,7 @@ class Config:
         parser_config = ParserConfig()
         logging_config = LoggingConfig()
         performance_config = PerformanceConfig()
+        retrieval_config = RetrievalConfig()
         app_config = AppConfig()
         enhanced_query_config = EnhancedQueryConfig()
         
@@ -160,6 +169,18 @@ class Config:
                 if hasattr(performance_config, key):
                     setattr(performance_config, key, value)
         
+        # 解析检索配置
+        if "retrieval" in config_dict:
+            retrieval_data = config_dict["retrieval"]
+            # 处理嵌套的 vector_store 配置
+            if "vector_store" in retrieval_data:
+                vector_store_data = retrieval_data["vector_store"]
+                if "top_k" in vector_store_data:
+                    retrieval_config.vector_store_top_k = vector_store_data["top_k"]
+            # 处理顶级的 final_top_k 配置
+            if "final_top_k" in retrieval_data:
+                retrieval_config.final_top_k = retrieval_data["final_top_k"]
+        
         # 解析应用配置
         if "app" in config_dict:
             for key, value in config_dict["app"].items():
@@ -179,6 +200,7 @@ class Config:
             parser=parser_config,
             logging=logging_config,
             performance=performance_config,
+            retrieval=retrieval_config,
             app=app_config,
             enhanced_query=enhanced_query_config
         )

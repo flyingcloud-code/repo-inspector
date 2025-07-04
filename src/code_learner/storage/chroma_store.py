@@ -42,6 +42,7 @@ class ChromaVectorStore(IVectorStore):
             persist_directory: 持久化存储目录
             project_id: 项目ID，用于隔离不同项目的数据
         """
+        self.logger = logging.getLogger(__name__)
         self.persist_directory = Path(persist_directory)
         self.project_id = project_id
         self.client = None
@@ -799,3 +800,93 @@ class ChromaVectorStore(IVectorStore):
         except Exception as e:
             logger.error(f"❌ 获取项目信息失败 '{project_id}': {e}")
             raise DatabaseConnectionError("chromadb", f"Failed to get project info '{project_id}': {str(e)}")
+
+    def query(self, query_texts: List[str], top_k: int = 5, embedding_engine=None) -> List[Dict[str, Any]]:
+        """
+        在向量数据库中查询与给定文本最相似的嵌入。
+        现在接受 top_k 参数和可选的嵌入引擎。
+        """
+        if not query_texts:
+            return []
+
+        collection = self.get_collection(self.get_collection_name())
+        if not collection:
+            self.logger.warning("查询失败：无法获取Chroma集合。")
+            return []
+
+        try:
+            self.logger.info(f"🔍 开始向量查询: top_k={top_k}, collection='{collection.name}'")
+            
+            # 如果提供了嵌入引擎，使用它来生成查询向量
+            if embedding_engine:
+                self.logger.info("使用提供的嵌入引擎生成查询向量")
+                query_embeddings = []
+                for text in query_texts:
+                    embedding = embedding_engine.encode_text(text)
+                    query_embeddings.append(embedding)
+                
+                # 使用向量查询
+                results = collection.query(
+                    query_embeddings=query_embeddings,
+                    n_results=top_k,
+                    include=["metadatas", "documents", "distances"]
+                )
+            else:
+                # 回退到文本查询（可能会有维度不匹配问题）
+                self.logger.warning("未提供嵌入引擎，使用文本查询（可能导致维度不匹配）")
+                results = collection.query(
+                    query_texts=query_texts,
+                    n_results=top_k,
+                    include=["metadatas", "documents", "distances"]
+                )
+            
+            self.logger.info(f"✅ 查询成功: 找到 {len(results.get('ids', [[]])[0])} 个结果")
+            
+            # 展平结果
+            output = []
+            if not results or not results.get('ids', [[]])[0]:
+                return []
+
+            ids = results['ids'][0]
+            distances = results['distances'][0]
+            metadatas = results['metadatas'][0]
+            documents = results['documents'][0]
+
+            for i, doc_id in enumerate(ids):
+                output.append({
+                    "id": doc_id,
+                    "distance": distances[i],
+                    "metadata": metadatas[i],
+                    "content": documents[i]
+                })
+            
+            return output
+        except Exception as e:
+            self.logger.error(f"在集合 '{collection.name}' 中进行向量查询时出错: {e}", exc_info=True)
+            return []
+
+    def add(self, documents: List[str], metadatas: List[Dict[str, Any]], ids: List[str]):
+        pass
+
+    def get_collection(self, name: str) -> Optional[Any]:
+        """按名称获取Chroma集合。"""
+        if not self.is_available():
+            return None
+
+        # 直接使用传入的名称，不再调用 get_collection_name
+        collection_name = name
+        
+        # 先检查缓存
+        if collection_name in self.collections:
+            return self.collections[collection_name]
+        
+        # 缓存中没有，尝试从 Chroma 客户端获取
+        try:
+            collection = self.client.get_collection(collection_name)
+            # 缓存集合对象
+            self.collections[collection_name] = collection
+            self.logger.info(f"✅ 成功获取集合: {collection_name}")
+            return collection
+        except Exception as e:
+            self.logger.warning(f"无法获取集合 '{collection_name}': {e}")
+            return None
