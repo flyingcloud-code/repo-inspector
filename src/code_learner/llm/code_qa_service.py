@@ -26,7 +26,15 @@ class CodeQAService:
     结合Neo4j图数据库和Chroma向量数据库，提供智能的代码问答功能
     """
     
-    def __init__(self, project_id: str):
+    def __init__(self, project_id: str, verbose_rag: bool = False):
+        """初始化代码问答服务
+        
+        Args:
+            project_id: 项目ID，用于数据隔离
+            verbose_rag: 是否启用详细的RAG检索日志
+        """
+        self.project_id = project_id
+        self.verbose_rag = verbose_rag
         from ..retrieval.multi_source_builder import MultiSourceContextBuilder
 
         self.config = ConfigManager()
@@ -124,7 +132,8 @@ class CodeQAService:
             # 执行多源检索
             rerank_result = self.context_builder.build_context(
                 query=question,
-                intent=intent_analysis
+                intent=intent_analysis,
+                verbose=self.verbose_rag
             )
             
             # 将结果格式化为字符串

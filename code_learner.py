@@ -210,6 +210,11 @@ class MainCLI:
             '--file',
             help='聚焦于特定文件'
         )
+        query_parser.add_argument(
+            '--verbose-rag',
+            action='store_true',
+            help='为RAG检索步骤启用详细输出'
+        )
     
     def _add_call_graph_command(self, subparsers):
         """添加调用图命令"""
@@ -329,20 +334,11 @@ class MainCLI:
     
     def _handle_analyze_command(self, args: argparse.Namespace) -> int:
         """处理分析命令"""
-        cmd = AnalyzeCommands()
-        return cmd.analyze_project(
-            project_name_or_id=args.project,
-            incremental=args.incremental,
-            include_pattern=args.include,
-            exclude_pattern=args.exclude,
-            threads=args.threads,
-            verbose=args.verbose
-        )
+        return AnalyzeCommands().run_analysis(args)
     
     def _handle_query_command(self, args: argparse.Namespace) -> int:
         """处理查询命令"""
-        cmd = QueryCommands()
-        return cmd.run_query(args)
+        return QueryCommands().run_query(args)
     
     def _handle_call_graph_command(self, args: argparse.Namespace) -> int:
         """处理调用图命令"""

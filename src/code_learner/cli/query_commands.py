@@ -37,8 +37,11 @@ class QueryCommands:
         project_id = project_info['id']
         project_name = project_info['name']
         
-        # 使用项目ID正确初始化服务
-        qa_service = CodeQAService(project_id=project_id)
+        # 获取 verbose_rag 标志，如果不存在则默认为 False
+        verbose_rag = getattr(args, 'verbose_rag', False)
+        
+        # 使用项目ID和verbose标志正确初始化服务
+        qa_service = CodeQAService(project_id=project_id, verbose_rag=verbose_rag)
 
         if query:
             return self._run_single_query(qa_service, project_name, project_id, query)

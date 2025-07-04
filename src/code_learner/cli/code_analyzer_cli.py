@@ -419,7 +419,8 @@ class InteractiveQuerySession:
     """交互式问答会话 - 直接针对实际代码库"""
     
     def __init__(self, project_path: Path, history_file: Optional[Path] = None,
-               focus_function: Optional[str] = None, focus_file: Optional[str] = None):
+               focus_function: Optional[str] = None, focus_file: Optional[str] = None,
+               verbose_rag: bool = False):
         """初始化交互式问答会话
         
         Args:
@@ -427,18 +428,25 @@ class InteractiveQuerySession:
             history_file: 历史记录文件
             focus_function: 聚焦的函数
             focus_file: 聚焦的文件
+            verbose_rag: 为RAG检索步骤启用详细输出
         """
         self.project_path = project_path
         self.history_file = history_file
         self.focus_function = focus_function
         self.focus_file = focus_file
+        self.verbose_rag = verbose_rag  # 保存标志
+        
+        self.registry = ProjectRegistry()
+        self.qa_service = None
+        
+        logger.info("交互式查询会话已初始化")
         
         # 根据项目路径生成项目ID
         abs_path = str(project_path.resolve())
         self.project_id = "auto_" + hashlib.md5(abs_path.encode()).hexdigest()[:8]
         
         # 创建带项目ID的问答服务
-        self.qa_service = CodeQAService(project_id=self.project_id)
+        self.qa_service = CodeQAService(project_id=self.project_id, verbose_rag=self.verbose_rag)
         self.history = []
         
         # 加载历史记录
@@ -860,6 +868,11 @@ def create_parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--file", help="聚焦于特定文件")
     query_parser.add_argument("--verbose", "-v", action="store_true", 
                             help="显示详细日志")
+    query_parser.add_argument(
+        "--verbose-rag",
+        action="store_true",
+        help="为RAG检索步骤启用详细输出"
+    )
     
     # status命令 - 系统状态检查
     status_parser = subparsers.add_parser("status", help="系统状态检查")
@@ -941,7 +954,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 project_path=project_path,
                 history_file=history_file,
                 focus_function=args.function,
-                focus_file=args.file
+                focus_file=args.file,
+                verbose_rag=args.verbose_rag
             )
             
             session.start(args.query)

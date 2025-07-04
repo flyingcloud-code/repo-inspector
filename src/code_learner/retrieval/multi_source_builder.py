@@ -6,15 +6,32 @@
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+import textwrap
 
-from ..core.context_models import ContextItem
+from ..core.context_models import ContextItem, SourceType
 from ..core.retriever_interfaces import IReranker
+from ..rerank.llm_reranker import LLMReranker
 from .vector_retriever import VectorContextRetriever
 from .graph_retriever import GraphContextRetriever
 from ..config.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
+
+
+def _print_verbose_retrieval(title: str, items: List[ContextItem]):
+    """以可读格式打印详细的检索结果"""
+    print("\n" + "="*80)
+    print(f"🔍 {title}")
+    print("="*80)
+    if not items:
+        print("  -> 未找到任何内容")
+        return
+    
+    for i, item in enumerate(items, 1):
+        content_preview = textwrap.shorten(item.content.replace('\n', ' '), width=100, placeholder="...")
+        print(f"  [{i:02d}] Source: {item.source:<15} | Score: {item.score:.4f} | Content: {content_preview}")
+    print("="*80 + "\n")
 
 
 class MultiSourceContextBuilder:
@@ -37,12 +54,13 @@ class MultiSourceContextBuilder:
         
         logger.info("MultiSourceContextBuilder initialized (simple version)")
         
-    def build_context(self, query: str, intent: Dict[str, Any]) -> List[ContextItem]:
+    def build_context(self, query: str, intent: Dict[str, Any], verbose: bool = False) -> List[ContextItem]:
         """构建多源上下文
         
         Args:
             query: 用户查询
             intent: 意图分析结果
+            verbose: 是否打印详细检索结果
             
         Returns:
             List[ContextItem]: 重排序后的上下文项
@@ -85,6 +103,10 @@ class MultiSourceContextBuilder:
             reranked_items = self.reranker.rerank(query, deduplicated_items, final_top_k)
         
         logger.info(f"Context built: {len(all_items)} → {len(deduplicated_items)} → {len(reranked_items)} items")
+        
+        if verbose:
+            _print_verbose_retrieval("Combined & Deduplicated Results", deduplicated_items)
+            _print_verbose_retrieval("Reranked Results", reranked_items)
         
         return reranked_items
     
