@@ -323,18 +323,26 @@ class MainCLI:
     
     def _handle_project_command(self, args: argparse.Namespace) -> int:
         """处理项目管理命令"""
-        cmd = ProjectCommands()
+        commands = ProjectCommands()
         if args.project_command == 'create':
-            return cmd.create_project(args)
+            return commands.create_project(args)
         elif args.project_command == 'list':
-            return cmd.list_projects(args)
+            return commands.list_projects(args)
         elif args.project_command == 'delete':
-            return cmd.delete_project(args)
+            return commands.delete_project(args)
         return 1
     
     def _handle_analyze_command(self, args: argparse.Namespace) -> int:
         """处理分析命令"""
-        return AnalyzeCommands().run_analysis(args)
+        commands = AnalyzeCommands()
+        return commands.analyze_project(
+            project_name_or_id=args.project,
+            incremental=args.incremental,
+            include_pattern=args.include,
+            exclude_pattern=args.exclude,
+            threads=args.threads,
+            verbose=args.verbose
+        )
     
     def _handle_query_command(self, args: argparse.Namespace) -> int:
         """处理查询命令"""

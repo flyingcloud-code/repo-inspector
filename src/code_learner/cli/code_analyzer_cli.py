@@ -75,6 +75,15 @@ class CodeAnalyzer:
         self.service_factory = ServiceFactory()
         self.embedding_engine = self.service_factory.get_embedding_engine()
         self.vector_store = self.service_factory.create_vector_store(project_id=self.project_id)
+        
+        # 在分析开始前，为VectorStore设置嵌入函数
+        if hasattr(self.vector_store, 'set_embedding_function'):
+            logger.info("为ChromaVectorStore设置嵌入函数...")
+            self.vector_store.set_embedding_function(
+                model_name=self.embedding_engine.model_name,
+                cache_dir=self.embedding_engine.cache_dir
+            )
+            
         self.code_chunker = CodeChunker()
         self.code_embedder = CodeEmbedder(
             embedding_engine=self.embedding_engine,

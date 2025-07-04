@@ -180,6 +180,13 @@ class ServiceFactory:
                 project_id=project_id
             )
             
+            # 设置嵌入函数 - 这是关键步骤！
+            embedding_engine = self.get_embedding_engine()
+            store.set_embedding_function(
+                model_name=embedding_engine.model_name,
+                cache_dir=embedding_engine.cache_dir
+            )
+            
             # 创建默认集合（会自动使用项目ID前缀）
             collection_name = vector_config.get("collection_name", "code_embeddings")
             store.create_collection(collection_name)

@@ -36,6 +36,13 @@ class VectorContextRetriever(IContextRetriever):
         
         # Initialize vector store with project isolation
         self.vector_store = ChromaVectorStore(project_id=project_id)
+        
+        # 设置ChromaDB的嵌入函数，这是保证查询正确的关键
+        self.logger.info("Setting ChromaDB embedding function for the retriever...")
+        self.vector_store.set_embedding_function(
+            model_name=self.embedding_engine.model_name,
+            cache_dir=self.embedding_engine.cache_dir
+        )
         logger.info("VectorContextRetriever initialized.")
 
     def get_source_type(self) -> SourceType:
@@ -57,19 +64,17 @@ class VectorContextRetriever(IContextRetriever):
         sub_queries = self._generate_sub_queries(query, intent)
         
         all_results: List[Dict[str, Any]] = []
-        for sub_query in sub_queries:
+        if sub_queries:
             try:
-                # 将 top_k 和嵌入引擎传递给查询
+                # 将 top_k 传递给查询, 不再需要 embedding_engine
                 results = self.vector_store.query(
-                    query_texts=[sub_query], 
-                    top_k=retriever_top_k,
-                    embedding_engine=self.embedding_engine
+                    query_texts=sub_queries, 
+                    top_k=retriever_top_k
                 )
                 if results:
                     all_results.extend(results)
             except Exception as e:
-                self.logger.error(f"Vector search for sub-query '{sub_query}' failed: {e}", exc_info=True)
-                continue
+                self.logger.error(f"Vector search for sub-queries failed: {e}", exc_info=True)
             
         return self._deduplicate_and_convert(all_results, retriever_top_k)
     
@@ -101,15 +106,12 @@ class VectorContextRetriever(IContextRetriever):
         seen_content = set()
         context_items = []
         
-        # Sort by distance ascending (lower distance = higher similarity)
-        results.sort(key=lambda x: x.get("distance", 1.0))
+        # Sort by score descending (higher score = higher similarity)
+        results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         
         for result in results:
-            # The key for the content is 'content', not 'document'.
             content = result.get("content")
-            distance = result.get("distance", 1.0)
-            # Convert distance to similarity score (1 - distance)
-            score = max(0.0, 1.0 - distance)
+            score = result.get("score", 0.0)
             
             if not content or content in seen_content:
                 continue

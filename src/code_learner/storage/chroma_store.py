@@ -17,6 +17,7 @@ import uuid
 try:
     import chromadb
     from chromadb.config import Settings
+    from chromadb.utils import embedding_functions
     CHROMADB_AVAILABLE = True
 except ImportError as e:
     raise ImportError("chromadb library is required for ChromaVectorStore but is not installed. Please install 'chromadb' package.")
@@ -39,14 +40,15 @@ class ChromaVectorStore(IVectorStore):
         """初始化Chroma向量存储
         
         Args:
-            persist_directory: 持久化存储目录
-            project_id: 项目ID，用于隔离不同项目的数据
+            persist_directory: 持久化目录路径
+            project_id: 项目ID，用于数据隔离
         """
         self.logger = logging.getLogger(__name__)
         self.persist_directory = Path(persist_directory)
         self.project_id = project_id
-        self.client = None
-        self.collections = {}
+        self.client: Optional[chromadb.Client] = None
+        self.collections: Dict[str, chromadb.Collection] = {}
+        self.embedding_function = None
         
         # 确保存储目录存在
         self.persist_directory.mkdir(parents=True, exist_ok=True)
@@ -55,6 +57,14 @@ class ChromaVectorStore(IVectorStore):
         
         if self.project_id:
             logger.info(f"项目隔离已启用，项目ID: {self.project_id}")
+    
+    def set_embedding_function(self, model_name: str, cache_dir: str):
+        """设置并创建嵌入函数"""
+        self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=model_name,
+            cache_folder=cache_dir
+        )
+        self.logger.info(f"ChromaDB embedding function set to use model: {model_name}")
     
     def get_collection_name(self, base_name: str = "code_embeddings") -> str:
         """根据项目ID生成集合名称
@@ -120,24 +130,16 @@ class ChromaVectorStore(IVectorStore):
                 logger.info(f"📚 集合 '{collection_name}' 已存在，获取现有集合")
                 collection = self.client.get_collection(collection_name)
             else:
-                # 创建新集合，使用余弦相似度
-                metadata = {
-                    "hnsw:space": "cosine"  # 余弦相似度
-                }
+                # 创建新集合，使用我们指定的嵌入函数
+                if not self.embedding_function:
+                    raise ValueError("Embedding function not set. Please call set_embedding_function() first.")
                 
-                # 添加描述，确保是字符串类型
-                metadata["description"] = f"Code embeddings collection: {collection_name}"
-                
-                # 仅当project_id不为None时添加到元数据
-                if self.project_id:
-                    metadata["project_id"] = str(self.project_id)
-                
-                # 创建集合
                 collection = self.client.create_collection(
                     name=collection_name,
-                    metadata=metadata
+                    embedding_function=self.embedding_function, # 指定嵌入函数
+                    metadata={"hnsw:space": "cosine"}  # 确保使用余弦相似度
                 )
-                logger.info(f"✅ 新集合创建成功: {collection_name}")
+                self.logger.info(f"✅ 新集合 '{collection_name}' 创建成功，使用cosine相似度。")
             
             # 缓存集合对象
             self.collections[collection_name] = collection
@@ -190,27 +192,19 @@ class ChromaVectorStore(IVectorStore):
                 collection = self.client.get_collection(collection_name)
                 self.collections[collection_name] = collection
                 logger.info(f"✅ 成功获取现有集合: {collection_name}")
-            except Exception as e:
-                logger.info(f"集合不存在，将创建新集合: {collection_name} (错误: {str(e)})")
+            except Exception:
+                logger.info(f"集合不存在，将创建新集合: {collection_name}")
                 # 创建新集合
-                metadata = {
-                    "hnsw:space": "cosine"  # 余弦相似度
-                }
+                if not self.embedding_function:
+                    raise ValueError("Embedding function not set. Please call set_embedding_function() first.")
                 
-                # 添加描述，确保是字符串类型
-                metadata["description"] = f"Code embeddings collection: {collection_name}"
-                
-                # 仅当project_id不为None时添加到元数据
-                if self.project_id:
-                    metadata["project_id"] = str(self.project_id)
-                
-                # 创建集合
                 collection = self.client.create_collection(
                     name=collection_name,
-                    metadata=metadata
+                    embedding_function=self.embedding_function, # 指定嵌入函数
+                    metadata={"hnsw:space": "cosine"}  # 确保使用余弦相似度
                 )
                 self.collections[collection_name] = collection
-                logger.info(f"✅ 新集合创建成功: {collection_name}")
+                self.logger.info(f"✅ 新集合 '{collection_name}' 创建成功。")
             
             # 获取集合信息
             count = collection.count()
@@ -801,92 +795,94 @@ class ChromaVectorStore(IVectorStore):
             logger.error(f"❌ 获取项目信息失败 '{project_id}': {e}")
             raise DatabaseConnectionError("chromadb", f"Failed to get project info '{project_id}': {str(e)}")
 
-    def query(self, query_texts: List[str], top_k: int = 5, embedding_engine=None) -> List[Dict[str, Any]]:
+    def query(self, query_texts: List[str], top_k: int = 5) -> List[Dict[str, Any]]:
         """
         在向量数据库中查询与给定文本最相似的嵌入。
-        现在接受 top_k 参数和可选的嵌入引擎。
+        此版本将使用ChromaDB的内置文本查询和嵌入，以确保归一化正确。
         """
         if not query_texts:
             return []
 
-        collection = self.get_collection(self.get_collection_name())
+        collection_name = self.get_collection_name()
+        collection = self.get_collection(collection_name)
+
         if not collection:
-            self.logger.warning("查询失败：无法获取Chroma集合。")
+            self.logger.warning(f"查询失败：无法获取Chroma集合 '{collection_name}'。")
             return []
 
         try:
             self.logger.info(f"🔍 开始向量查询: top_k={top_k}, collection='{collection.name}'")
-            
-            # 如果提供了嵌入引擎，使用它来生成查询向量
-            if embedding_engine:
-                self.logger.info("使用提供的嵌入引擎生成查询向量")
-                query_embeddings = []
-                for text in query_texts:
-                    embedding = embedding_engine.encode_text(text)
-                    query_embeddings.append(embedding)
-                
-                # 使用向量查询
-                results = collection.query(
-                    query_embeddings=query_embeddings,
-                    n_results=top_k,
-                    include=["metadatas", "documents", "distances"]
-                )
-            else:
-                # 回退到文本查询（可能会有维度不匹配问题）
-                self.logger.warning("未提供嵌入引擎，使用文本查询（可能导致维度不匹配）")
-                results = collection.query(
-                    query_texts=query_texts,
-                    n_results=top_k,
-                    include=["metadatas", "documents", "distances"]
-                )
-            
+            # 必须使用 query_texts 让chroma处理嵌入和归一化
+            results = collection.query(
+                query_texts=query_texts,
+                n_results=top_k,
+                include=["metadatas", "documents", "distances"]
+            )
             self.logger.info(f"✅ 查询成功: 找到 {len(results.get('ids', [[]])[0])} 个结果")
             
             # 展平结果
-            output = []
-            if not results or not results.get('ids', [[]])[0]:
+            flattened_results = []
+            if not results or not results.get('ids') or not results['ids'][0]:
+                self.logger.info("查询返回空结果。")
                 return []
 
             ids = results['ids'][0]
-            distances = results['distances'][0]
-            metadatas = results['metadatas'][0]
             documents = results['documents'][0]
+            metadatas = results['metadatas'][0]
+            distances = results['distances'][0]
 
             for i, doc_id in enumerate(ids):
-                output.append({
+                # score is 1 - distance for cosine similarity
+                score = 1 - distances[i]
+                flattened_results.append({
                     "id": doc_id,
-                    "distance": distances[i],
+                    "content": documents[i],
                     "metadata": metadatas[i],
-                    "content": documents[i]
+                    "score": score
                 })
             
-            return output
+            self.logger.debug(f"展平后的查询结果: {flattened_results}")
+            return flattened_results
+
         except Exception as e:
-            self.logger.error(f"在集合 '{collection.name}' 中进行向量查询时出错: {e}", exc_info=True)
-            return []
+            self.logger.error(f"❌ 在集合 '{collection_name}' 中查询失败: {e}", exc_info=True)
+            raise QueryError("chromadb", f"Failed to query collection '{collection_name}': {str(e)}")
 
     def add(self, documents: List[str], metadatas: List[Dict[str, Any]], ids: List[str]):
-        pass
+        """通用添加方法，处理文本、元数据和ID。"""
+        if not self.client:
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
+        
+        if not documents or not metadatas or not ids:
+            raise ValueError("documents, metadatas, and ids must be provided")
+        
+        collection_name = self.get_collection_name()
+        collection = self.get_collection(collection_name)
+        
+        if not collection:
+            raise DatabaseConnectionError("chromadb", f"集合 '{collection_name}' 不存在")
+        
+        collection.add(
+            documents=documents,
+            metadatas=metadatas,
+            ids=ids
+        )
 
     def get_collection(self, name: str) -> Optional[Any]:
-        """按名称获取Chroma集合。"""
-        if not self.is_available():
-            return None
-
-        # 直接使用传入的名称，不再调用 get_collection_name
-        collection_name = name
+        """获取已缓存或远程的集合对象"""
+        if name in self.collections:
+            return self.collections[name]
         
-        # 先检查缓存
-        if collection_name in self.collections:
-            return self.collections[collection_name]
+        if not self.client:
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
         
-        # 缓存中没有，尝试从 Chroma 客户端获取
         try:
-            collection = self.client.get_collection(collection_name)
-            # 缓存集合对象
-            self.collections[collection_name] = collection
-            self.logger.info(f"✅ 成功获取集合: {collection_name}")
+            # 修正：获取集合时不应再提供嵌入函数。
+            # ChromaDB会从持久化存储中自动加载已配置的函数。
+            # 重复提供会导致冲突错误。
+            collection = self.client.get_collection(name=name)
+            self.collections[name] = collection
             return collection
         except Exception as e:
-            self.logger.warning(f"无法获取集合 '{collection_name}': {e}")
+            self.logger.warning(f"获取集合 '{name}' 失败: {e}")
             return None
