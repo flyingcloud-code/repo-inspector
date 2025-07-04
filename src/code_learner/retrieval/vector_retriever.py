@@ -105,8 +105,8 @@ class VectorContextRetriever(IContextRetriever):
         results.sort(key=lambda x: x.get("distance", 1.0))
         
         for result in results:
-            # Chroma returns 'document' instead of 'content'
-            content = result.get("document")
+            # The key for the content is 'content', not 'document'.
+            content = result.get("content")
             distance = result.get("distance", 1.0)
             # Convert distance to similarity score (1 - distance)
             score = max(0.0, 1.0 - distance)
