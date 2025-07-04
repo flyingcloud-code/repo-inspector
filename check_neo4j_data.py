@@ -70,13 +70,13 @@ class Neo4jChecker:
     def check_random_function_properties(self, sample_size: int = 3) -> dict:
         """随机抽查一些函数节点的属性是否完整。"""
         logger.info(f"  - 正在随机抽查 {sample_size} 个函数的属性...")
-        query = """
+            query = """
         MATCH (f:Function {project_id: $project_id})
         WHERE f.docstring IS NOT NULL AND f.docstring <> ''
         RETURN f
         ORDER BY rand()
         LIMIT $limit
-        """
+            """
         results = self.graph_store.query(query, {'project_id': self.project_id, 'limit': sample_size})
         
         records = results
@@ -131,7 +131,7 @@ class Neo4jChecker:
         prop_checks = results.get("函数属性抽查", {})
         if not prop_checks or "抽查结果" in prop_checks:
             print("  ⚠️ 未能执行有效的属性抽查。")
-        else:
+            else:
             for func_name, statuses in prop_checks.items():
                 all_ok = all(statuses.values())
                 status = "✅" if all_ok else "❌"
@@ -168,4 +168,4 @@ def main():
         logger.error(f"执行检查时发生意外错误: {e}", exc_info=True)
 
 if __name__ == "__main__":
-    main()
+    main() 

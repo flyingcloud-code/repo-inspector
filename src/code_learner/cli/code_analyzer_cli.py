@@ -778,7 +778,7 @@ def check_system_status(verbose: bool = False) -> Dict[str, Any]:
 
 def analyze_code(project_path: str, output_dir: str = None, incremental: bool = False,
                include_pattern: str = None, exclude_pattern: str = None,
-               threads: int = None, verbose: bool = False) -> Dict[str, Any]:
+               threads: int = None, verbose: bool = False, project_id: str = None) -> Dict[str, Any]:
     """分析代码
     
     封装代码分析功能，方便其他模块调用
@@ -791,6 +791,7 @@ def analyze_code(project_path: str, output_dir: str = None, incremental: bool = 
         exclude_pattern: 排除的文件模式
         threads: 并行处理线程数
         verbose: 是否显示详细日志
+        project_id: 项目ID，用于数据隔离
         
     Returns:
         Dict[str, Any]: 分析结果统计
@@ -814,7 +815,8 @@ def analyze_code(project_path: str, output_dir: str = None, incremental: bool = 
         output_dir=output_dir,
         include_pattern=include_pattern,
         exclude_pattern=exclude_pattern,
-        threads=threads or 4
+        threads=threads or 4,
+        project_id=project_id
     )
     
     # 执行分析

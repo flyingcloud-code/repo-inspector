@@ -117,10 +117,10 @@ class ConfigManager:
             Dict[str, Any]: 更新后的配置数据字典
         """
         env_mappings = {
-            'NEO4J_PASSWORD': ['database', 'neo4j', 'password'],  # 必需
-            'NEO4J_URI': ['database', 'neo4j', 'uri'],
-            'NEO4J_USER': ['database', 'neo4j', 'user'],
-            'OPENROUTER_API_KEY': ['llm', 'chat', 'api_key'],     # 必需
+            'NEO4J_PASSWORD': ['database', 'neo4j_password'],  # 必需
+            'NEO4J_URI': ['database', 'neo4j_uri'],
+            'NEO4J_USER': ['database', 'neo4j_user'],
+            'OPENROUTER_API_KEY': ['llm', 'chat_api_key'],     # 必需
             'LOG_LEVEL': ['logging', 'level'],
             'DEBUG': ['app', 'debug'],
             'VERBOSE': ['app', 'verbose'],
@@ -173,13 +173,13 @@ class ConfigManager:
                 raise ConfigurationError(f"无效的日志级别: {log_level}, 有效值: {valid_levels}")
         
         # 验证Neo4j密码
-        if 'database' in config_data and 'neo4j' in config_data['database']:
-            if 'password' not in config_data['database']['neo4j'] or not config_data['database']['neo4j']['password']:
+        if 'database' in config_data:
+            if 'neo4j_password' not in config_data['database'] or not config_data['database']['neo4j_password']:
                 raise ConfigurationError("NEO4J_PASSWORD环境变量是必需的")
         
         # 验证API密钥
-        if 'llm' in config_data and 'chat' in config_data['llm']:
-            if 'api_key' not in config_data['llm']['chat'] or not config_data['llm']['chat']['api_key']:
+        if 'llm' in config_data:
+            if 'chat_api_key' not in config_data['llm'] or not config_data['llm']['chat_api_key']:
                 raise ConfigurationError("OPENROUTER_API_KEY环境变量是必需的")
     
     def _create_config_object(self, config_data: Dict[str, Any]) -> Config:

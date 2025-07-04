@@ -141,13 +141,7 @@ class CParser(IParser):
 
                 return_type = type_node.text.decode('utf-8').strip() if type_node else "void"
 
-                docstring = ""
-                comment_node = node.prev_sibling
-                # 循环查找，跳过空白节点
-                while comment_node and not comment_node.is_named:
-                    comment_node = comment_node.prev_sibling
-                if comment_node and comment_node.type == 'comment':
-                    docstring = comment_node.text.decode('utf-8').strip()
+                docstring = self.extract_function_docstring(node, source_code)
                 
                 if func_name:
                     functions.append(Function(
@@ -160,9 +154,9 @@ class CParser(IParser):
                         return_type=return_type,
                         docstring=docstring
                     ))
-
+        
         return functions
-    
+
     def _fallback_extract_functions(self, source_code: str, file_path: str) -> List[Function]:
         """
         旧的、更简单的函数提取方法，作为备用
@@ -206,7 +200,7 @@ class CParser(IParser):
                     if name_node:
                         return name_node.text.decode('utf-8')
                 temp = temp.parent
-            return None
+                return None
 
         for node, name in captures:
             caller_name = find_enclosing_function(node)
@@ -223,13 +217,13 @@ class CParser(IParser):
                     comment_node = comment_node.prev_sibling
                 if comment_node and comment_node.type == 'comment':
                     call_context = comment_node.text.decode('utf-8').strip()
-                
+
                 call_relationships.append(FunctionCall(
                     caller_name=caller_name,
-                    callee_name=callee_name,
+                            callee_name=callee_name,
                     call_type='direct',  # 简化处理，后续可扩展
                     line_number=node.start_point[0] + 1,
-                    file_path=file_path,
+                            file_path=file_path,
                     context=call_context
                 ))
 
@@ -610,3 +604,83 @@ class CParser(IParser):
         
         # 确保分数在0-1范围内
         return max(0.0, min(1.0, score)) 
+
+    def extract_function_docstring(self, function_node, source_code: str) -> str:
+        """
+        提取函数的文档字符串，支持多种注释格式
+        
+        Args:
+            function_node: Tree-sitter函数定义节点
+            source_code: 源代码字符串
+            
+        Returns:
+            str: 清理后的文档字符串
+        """
+        # 向前搜索注释节点
+        comments = []
+        current_node = function_node.prev_sibling
+        search_limit = 15  # 最多向前搜索15个节点
+        
+        while current_node and search_limit > 0:
+            if current_node.type == 'comment':
+                comments.insert(0, current_node.text.decode('utf-8'))
+            elif current_node.is_named:
+                # 遇到其他有名节点（如其他函数、变量声明等），停止搜索
+                break
+            current_node = current_node.prev_sibling
+            search_limit -= 1
+        
+        # 处理找到的注释
+        if not comments:
+            return ""
+        
+        # 合并和清理注释内容
+        docstring_parts = []
+        for comment_text in comments:
+            cleaned = self._clean_comment_text(comment_text)
+            if cleaned:
+                docstring_parts.append(cleaned)
+        
+        return '\n'.join(docstring_parts).strip()
+    
+    def _clean_comment_text(self, comment_text: str) -> str:
+        """
+        清理注释文本，移除注释标记并格式化
+        
+        Args:
+            comment_text: 原始注释文本
+            
+        Returns:
+            str: 清理后的注释内容
+        """
+        import re
+        
+        # 移除 C++ 风格注释 //
+        if comment_text.strip().startswith('//'):
+            text = comment_text.strip()[2:].strip()
+            return text
+        
+        # 处理 /* */ 和 /** */ 风格注释
+        text = comment_text
+        
+        # 移除开始和结束标记
+        text = re.sub(r'/\*+', '', text)
+        text = re.sub(r'\*+/', '', text)
+        
+        # 按行处理
+        lines = text.split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            # 移除每行开头的 * 或 * 
+            if line.startswith('*'):
+                line = line[1:].strip()
+            elif line.startswith('* '):
+                line = line[2:].strip()
+            
+            # 保留非空行
+            if line:
+                cleaned_lines.append(line)
+        
+        return '\n'.join(cleaned_lines).strip() 

@@ -29,30 +29,29 @@ def parse_args(args: List[str]) -> argparse.Namespace:
     )
     
     # 子命令
-    subparsers = parser.add_subparsers(dest="command", help="子命令")
-    
-    # 分析项目命令
-    analyze_parser = subparsers.add_parser("analyze", help="分析项目依赖关系")
-    analyze_parser.add_argument("project_path", help="项目路径")
+    subparsers = parser.add_subparsers(dest="command", required=True, help="子命令")
     
     # 分析文件命令
     file_parser = subparsers.add_parser("file", help="分析单个文件的依赖关系")
-    file_parser.add_argument("file_path", help="文件路径")
+    file_parser.add_argument("file_path", help="要分析的文件路径")
+    file_parser.add_argument("project_path", help="所属项目的根路径，用于确定项目ID")
     
     # 生成依赖图命令
-    graph_parser = subparsers.add_parser("graph", help="生成依赖关系图")
+    graph_parser = subparsers.add_parser("graph", help="生成项目依赖关系图")
+    graph_parser.add_argument("project_path", help="已分析过的项目路径")
     graph_parser.add_argument("--format", "-f", choices=["mermaid", "json", "dot", "ascii"], 
-                            default="ascii", help="输出格式")
+                            default="ascii", help="输出格式 (默认: ascii)")
     graph_parser.add_argument("--scope", "-s", choices=["file", "module"], 
-                            default="module", help="依赖范围")
+                            default="module", help="依赖范围 (默认: module)")
     graph_parser.add_argument("--focus", "-i", help="聚焦的文件或模块")
-    graph_parser.add_argument("--output", "-o", help="输出文件路径")
+    graph_parser.add_argument("--output", "-o", help="输出文件路径 (不指定则打印到控制台)")
     
     # 检测循环依赖命令
-    cycle_parser = subparsers.add_parser("cycle", help="检测循环依赖")
+    cycle_parser = subparsers.add_parser("cycle", help="检测项目中的循环依赖")
+    cycle_parser.add_argument("project_path", help="已分析过的项目路径")
     
     # 通用选项
-    for p in [analyze_parser, file_parser, graph_parser, cycle_parser]:
+    for p in [file_parser, graph_parser, cycle_parser]:
         p.add_argument("--verbose", "-v", action="store_true", help="显示详细日志")
     
     return parser.parse_args(args)
@@ -80,38 +79,10 @@ def main(args: List[str] = None) -> int:
         logger.setLevel("INFO")
     
     # 获取依赖服务
-    dependency_service = ServiceFactory.get_dependency_service()
+    dependency_service = ServiceFactory.get_dependency_service(project_path=parsed_args.project_path)
     
     try:
-        if parsed_args.command == "analyze":
-            # 分析项目
-            project_path = Path(parsed_args.project_path)
-            if not project_path.exists() or not project_path.is_dir():
-                logger.error(f"项目路径不存在: {project_path}")
-                return 1
-            
-            logger.info(f"开始分析项目: {project_path}")
-            project_deps = dependency_service.analyze_project(project_path)
-            
-            # 输出统计信息
-            stats = project_deps.get_stats()
-            print("\n依赖关系统计:")
-            print(f"文件依赖数: {stats['file_dependencies_count']}")
-            print(f"模块依赖数: {stats['module_dependencies_count']}")
-            print(f"循环依赖数: {stats['circular_dependencies_count']}")
-            print(f"系统头文件数: {stats['system_headers_count']}")
-            print(f"项目头文件数: {stats['project_headers_count']}")
-            print(f"模块化评分: {stats['modularity_score']:.2f}/1.00")
-            
-            # 如果有循环依赖，输出警告
-            if stats['circular_dependencies_count'] > 0:
-                print("\n警告: 检测到循环依赖!")
-                for i, cycle in enumerate(project_deps.circular_dependencies):
-                    print(f"循环 {i+1}: {' -> '.join(cycle)}")
-            
-            return 0
-        
-        elif parsed_args.command == "file":
+        if parsed_args.command == "file":
             # 分析单个文件
             file_path = Path(parsed_args.file_path)
             if not file_path.exists() or not file_path.is_file():
@@ -119,7 +90,8 @@ def main(args: List[str] = None) -> int:
                 return 1
             
             logger.info(f"开始分析文件: {file_path}")
-            dependencies = dependency_service.analyze_file(file_path)
+            # Note: analyze_file is a lightweight operation, may not need full service
+            dependencies = dependency_service.analyze_file_dependencies(file_path)
             
             # 输出依赖信息
             print(f"\n文件 {file_path.name} 的依赖关系:")
@@ -162,6 +134,7 @@ def main(args: List[str] = None) -> int:
         
         else:
             # 未指定命令，显示帮助
+            # This case should not be reached due to `required=True`
             parse_args(["--help"])
             return 1
     

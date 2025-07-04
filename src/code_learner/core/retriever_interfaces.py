@@ -7,39 +7,30 @@
 
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
-from .context_models import (
-    ContextItem, 
-    IntentAnalysis, 
-    RetrievalConfig, 
-    RetrievalResult,
-    RerankResult
-)
+
+from .context_models import ContextItem, IntentAnalysis, RerankResult
 
 
 class IContextRetriever(ABC):
-    """上下文检索器接口
-    
-    定义了所有检索器必须实现的基本方法。
-    每个具体的检索器（Vector、CallGraph、Dependency）
-    都应该实现这个接口。
     """
+    Interface for all context retrieval components.
     
+    This ensures that each retriever (e.g., for vector search, graph search)
+    can be called in a standardized way by the main context builder.
+    """
     @abstractmethod
-    def retrieve(
-        self, 
-        query: str, 
-        intent_analysis: IntentAnalysis, 
-        config: RetrievalConfig
-    ) -> RetrievalResult:
-        """检索相关的上下文项
+    def retrieve(self, query: str, intent: Dict[str, Any]) -> List[ContextItem]:
+        """
+        Retrieves context relevant to the query and intent.
         
         Args:
-            query: 用户查询
-            intent_analysis: 意图分析结果
-            config: 检索配置
+            query: The user's original query string.
+            intent: A dictionary representing the analyzed intent of the query,
+                    which can be used to guide the retrieval process.
             
         Returns:
-            检索结果，包含上下文项列表和元数据
+            A list of ContextItem objects, or an empty list if no
+            relevant context is found.
         """
         pass
     
@@ -55,27 +46,24 @@ class IContextRetriever(ABC):
 
 
 class IReranker(ABC):
-    """重排序器接口
-    
-    定义了重排序器的基本方法，支持不同的重排序策略。
     """
+    Interface for a reranking component.
     
+    This standardizes the process of taking a list of context items
+    and re-ordering them based on their relevance to the original query.
+    """
     @abstractmethod
-    def rerank(
-        self, 
-        query: str, 
-        context_items: List[ContextItem], 
-        top_k: int = 5
-    ) -> RerankResult:
-        """对上下文项进行重新排序
+    def rerank(self, query: str, items: List[ContextItem], top_k: int) -> List[ContextItem]:
+        """
+        Reranks a list of context items.
         
         Args:
-            query: 原始查询
-            context_items: 待重排序的上下文项列表
-            top_k: 返回的top-k结果数量
+            query: The user's original query string.
+            items: A list of ContextItem objects from various sources.
+            top_k: The desired number of items to return after reranking.
             
         Returns:
-            重排序结果
+            A sorted list of the top_k most relevant ContextItem objects.
         """
         pass
     
@@ -86,20 +74,22 @@ class IReranker(ABC):
 
 
 class IIntentAnalyzer(ABC):
-    """意图分析器接口
-    
-    负责分析用户查询的意图，提取关键信息。
     """
+    Interface for the Intent Analyzer component.
     
+    This component is responsible for understanding the user's query
+    and extracting structured information to guide the retrieval process.
+    """
     @abstractmethod
     def analyze(self, query: str) -> IntentAnalysis:
-        """分析用户查询的意图
-        
+        """
+        Analyzes the user query to determine intent and extract entities.
+
         Args:
-            query: 用户查询字符串
-            
+            query: The user's natural language query.
+
         Returns:
-            意图分析结果
+            An IntentAnalysis object containing structured information about the query.
         """
         pass
 

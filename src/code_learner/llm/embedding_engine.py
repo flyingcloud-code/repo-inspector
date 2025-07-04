@@ -232,7 +232,8 @@ class JinaEmbeddingEngine(IEmbeddingEngine):
             int: 嵌入向量维度
         """
         if not self.model:
-            self._load_model()
+            # 使用默认模型名初始化
+            self.load_model("jinaai/jina-embeddings-v2-base-code")
         
         # 使用一个简单的文本获取维度
         test_embedding = self.embed_text("test")
@@ -248,7 +249,8 @@ class JinaEmbeddingEngine(IEmbeddingEngine):
             List[float]: 嵌入向量
         """
         if not self.model:
-            self._load_model()
+            # 使用默认模型名初始化
+            self.load_model("jinaai/jina-embeddings-v2-base-code")
         
         try:
             # 使用sentence-transformers进行嵌入

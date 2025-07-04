@@ -11,13 +11,11 @@ from ..core.interfaces import IEmbeddingEngine, IVectorStore, IGraphStore, IChat
 from ..llm.service_factory import ServiceFactory
 from ..utils.logger import get_logger
 from .intent_analyzer import IntentAnalyzer
-from ..retrieval.vector_retriever import VectorContextRetriever
-from ..retrieval.call_graph_retriever import CallGraphContextRetriever
-from ..retrieval.dependency_retriever import DependencyContextRetriever
-from ..retrieval.multi_source_builder import MultiSourceContextBuilder
-from ..rerank.llm_reranker import LLMReranker
-from ..core.context_models import IntentAnalysis, RetrievalConfig
 from ..config.config_manager import ConfigManager
+from ..config.prompt_templates import TEMPLATES
+from ..core.context_models import ContextItem
+from ..llm.chatbot import OpenRouterChatBot
+from ..rerank.llm_reranker import LLMReranker
 
 logger = get_logger(__name__)
 
@@ -28,91 +26,69 @@ class CodeQAService:
     结合Neo4j图数据库和Chroma向量数据库，提供智能的代码问答功能
     """
     
-    def __init__(self, project_id: str = None):
-        """初始化代码问答服务
-        
-        Args:
-            project_id: 项目ID，用于项目隔离
-        """
-        self.project_id = project_id
-        
-        # 延迟初始化各个组件
-        self.embedding_engine: Optional[IEmbeddingEngine] = None
-        self.vector_store: Optional[IVectorStore] = None
-        self.graph_store: Optional[IGraphStore] = None
-        self.chatbot: Optional[IChatBot] = None
-        self.intent_analyzer: Optional[IntentAnalyzer] = None
-        
-        logger.info(f"代码问答服务初始化，项目ID: {project_id}")
+    def __init__(self):
+        from ..retrieval.multi_source_builder import MultiSourceContextBuilder
+
+        self.config = ConfigManager()
+        self.chatbot = OpenRouterChatBot()
+        self.intent_analyzer = IntentAnalyzer(self.chatbot)
+        self.reranker = LLMReranker()
+        self.context_builder = MultiSourceContextBuilder(reranker=self.reranker)
+        self.logger = get_logger(__name__)
+        self.logger.info("CodeQAService initialized.")
     
-    def _ensure_services_initialized(self):
-        """确保所有服务都已初始化"""
-        if not self.embedding_engine:
-            self.embedding_engine = ServiceFactory.get_embedding_engine()
-        
-        if not self.vector_store:
-            factory = ServiceFactory()
-            self.vector_store = factory.create_vector_store(project_id=self.project_id)
-        
-        if not self.graph_store:
-            self.graph_store = ServiceFactory.get_graph_store(project_id=self.project_id)
-        
-        if not self.chatbot:
-            self.chatbot = ServiceFactory.get_chatbot()
-        
-        if not self.intent_analyzer:
-            self.intent_analyzer = IntentAnalyzer(self.chatbot)
-    
-    def ask_question(self, question: str, context: Optional[dict] = None) -> str:
+    def ask_question(self, question: str, project_id: str) -> Dict[str, Any]:
         """询问代码相关问题
         
         Args:
             question: 用户问题
-            context: 上下文信息，包含project_path, focus_function, focus_file
+            project_id: 项目ID，用于项目隔离
             
         Returns:
-            str: 回答内容
+            Dict[str, Any]: 回答内容
         """
         try:
-            logger.info(f"收到代码问题: {question}")
+            self.logger.info(f"收到代码问题: {question}")
             
             # 确保所有服务已初始化
             self._ensure_services_initialized()
             
             # 使用意图分析器分析问题
-            logger.info("使用意图分析器分析用户问题...")
-            intent_analysis = self.intent_analyzer.analyze_question(question, context)
-            logger.info(f"意图分析结果: {intent_analysis}")
+            self.logger.info("使用意图分析器分析用户问题...")
+            intent_analysis = self.intent_analyzer.analyze_question(question, None)
+            self.logger.info(f"意图分析结果: {intent_analysis}")
             
             # 构建增强的代码上下文
-            logger.info("构建代码上下文...")
-            code_context = self._build_enhanced_code_context(question, context, intent_analysis)
+            self.logger.info("构建代码上下文...")
+            code_context = self._build_enhanced_code_context(question, None, intent_analysis)
             
             # 记录上下文来源
             context_sources = []
-            if context and context.get("focus_function"):
-                context_sources.append(f"指定函数: {context['focus_function']}")
-            if context and context.get("focus_file"):
-                context_sources.append(f"指定文件: {context['focus_file']}")
-            
-            # 从意图分析中获取的信息
             if intent_analysis.get("functions"):
                 context_sources.append(f"检测到函数: {', '.join(intent_analysis['functions'])}")
             if intent_analysis.get("files"):
                 context_sources.append(f"检测到文件: {', '.join(intent_analysis['files'])}")
             
-            logger.info(f"上下文来源: {'; '.join(context_sources) if context_sources else '向量检索'}")
+            self.logger.info(f"上下文来源: {'; '.join(context_sources) if context_sources else '向量检索'}")
             
             # 调用LLM生成回答
-            logger.info("调用LLM生成回答...")
+            self.logger.info("调用LLM生成回答...")
             answer = self._generate_answer(question, code_context, intent_analysis)
             
-            logger.info("问题回答完成")
-            return answer
+            self.logger.info("问题回答完成")
+            return {"answer": answer}
             
         except Exception as e:
-            logger.error(f"问答过程中出错: {e}", exc_info=True)
-            return f"抱歉，在处理您的问题时遇到了错误: {str(e)}"
+            self.logger.error(f"问答过程中出错: {e}", exc_info=True)
+            return {"error": f"抱歉，在处理您的问题时遇到了错误: {str(e)}"}
+    
+    def _ensure_services_initialized(self):
+        """确保所有服务都已初始化"""
+        if not self.context_builder.reranker:
+            self.context_builder.reranker = self.reranker
+        
+        if not self.chatbot:
+            self.chatbot = self.chatbot
     
     def _build_enhanced_code_context(self, question: str, context: Optional[dict], 
                                  intent_analysis: Dict[str, Any]) -> str:
@@ -128,7 +104,7 @@ class CodeQAService:
         Returns:
             str: 增强的代码上下文
         """
-        logger.info("构建代码上下文...")
+        self.logger.info("构建代码上下文...")
         
         # 如果没有提供上下文，创建一个空的
         if context is None:
@@ -139,19 +115,15 @@ class CodeQAService:
         
         try:
             # 使用多源检索系统
-            logger.info("使用多源检索系统获取上下文...")
-            
-            # 初始化多源构建器
-            builder = self._create_multi_source_builder()
+            self.logger.info("使用多源检索系统获取上下文...")
             
             # 获取多源上下文
             # 从配置管理器获取final_top_k
-            config_mgr = ConfigManager()
-            final_top_k = config_mgr.get_config().enhanced_query.final_top_k
-            logger.info(f"从配置获取final_top_k={final_top_k}")
+            final_top_k = self.config.get_config().enhanced_query.final_top_k
+            self.logger.info(f"从配置获取final_top_k={final_top_k}")
             
             # 执行多源检索
-            rerank_result = builder.build_context(
+            rerank_result = self.context_builder.build_context(
                 query=question, 
                 intent_analysis=intent_analysis,
                 config={"final_top_k": final_top_k}
@@ -160,7 +132,7 @@ class CodeQAService:
             # 将结果格式化为字符串
             if rerank_result and hasattr(rerank_result, 'items') and rerank_result.items:
                 code_context += "## 多源检索结果\n\n"
-                logger.info(f"多源检索找到 {len(rerank_result.items)} 个相关代码片段，置信度: {rerank_result.confidence:.3f}")
+                self.logger.info(f"多源检索找到 {len(rerank_result.items)} 个相关代码片段，置信度: {rerank_result.confidence:.3f}")
                 
                 for i, item in enumerate(rerank_result.items):
                     # 添加分隔符
@@ -193,60 +165,20 @@ class CodeQAService:
                         # 添加代码块标记
                         code_context += f"```c\n{item.content}\n```\n"
             else:
-                logger.warning("多源检索未返回结果或返回空列表")
+                self.logger.warning("多源检索未返回结果或返回空列表")
                 
                 # 尝试直接使用向量检索作为备选
-                logger.info("回退到向量检索...")
+                self.logger.info("回退到向量检索...")
                 code_context += self._get_enhanced_vector_context(question, intent_analysis, top_k=final_top_k)
                 
         except Exception as e:
-            logger.error(f"构建增强代码上下文失败: {e}", exc_info=True)
+            self.logger.error(f"构建增强代码上下文失败: {e}", exc_info=True)
             
             # 出错时也尝试使用向量检索作为备选
-            logger.info("发生错误，回退到向量检索...")
+            self.logger.info("发生错误，回退到向量检索...")
             code_context += self._get_enhanced_vector_context(question, intent_analysis)
         
         return code_context
-    
-    def _create_multi_source_builder(self) -> MultiSourceContextBuilder:
-        """创建多源上下文构建器
-        
-        初始化所有必要的检索器和重排序器
-        
-        Returns:
-            MultiSourceContextBuilder: 多源构建器实例
-        """
-        # 确保所有服务已初始化
-        self._ensure_services_initialized()
-        
-        # 创建检索器
-        vector_retriever = VectorContextRetriever(
-            vector_store=self.vector_store,
-            embedding_engine=self.embedding_engine
-        )
-        
-        call_graph_retriever = CallGraphContextRetriever(
-            graph_store=self.graph_store
-        )
-        
-        dependency_retriever = DependencyContextRetriever(
-            graph_store=self.graph_store
-        )
-        
-        # 创建重排序器
-        reranker = LLMReranker(
-            chatbot=self.chatbot
-        )
-        
-        # 创建多源构建器
-        builder = MultiSourceContextBuilder(
-            vector_retriever=vector_retriever,
-            call_graph_retriever=call_graph_retriever,
-            dependency_retriever=dependency_retriever,
-            reranker=reranker
-        )
-        
-        return builder
     
     def _get_enhanced_vector_context(self, question: str, intent_analysis: Dict[str, Any], top_k: int = 5) -> str:
         """使用向量检索获取增强上下文
@@ -261,12 +193,12 @@ class CodeQAService:
         Returns:
             str: 向量检索上下文
         """
-        logger.info(f"向量检索查询: {question}")
+        self.logger.info(f"向量检索查询: {question}")
         
         try:
             # 确保向量存储已初始化
-            if not self.vector_store or not self.embedding_engine:
-                logger.warning("向量存储或嵌入引擎未初始化")
+            if not self.context_builder.vector_retriever or not self.context_builder.embedding_engine:
+                self.logger.warning("向量存储或嵌入引擎未初始化")
                 return ""
             
             # 构建多个搜索查询
@@ -277,10 +209,10 @@ class CodeQAService:
             
             # 对每个查询执行向量检索
             for query in search_queries:
-                results = self.vector_store.similarity_search(
+                results = self.context_builder.vector_retriever.similarity_search(
                     query=query,
                     top_k=top_k,
-                    embedding_engine=self.embedding_engine
+                    embedding_engine=self.context_builder.embedding_engine
                 )
                 
                 if results:
@@ -292,7 +224,7 @@ class CodeQAService:
             # 限制结果数量
             unique_results = unique_results[:top_k]
             
-            logger.info(f"向量检索找到 {len(unique_results)} 个相关代码片段")
+            self.logger.info(f"向量检索找到 {len(unique_results)} 个相关代码片段")
             
             # 格式化结果
             if not unique_results:
@@ -325,7 +257,7 @@ class CodeQAService:
             return context
             
         except Exception as e:
-            logger.error(f"向量检索失败: {e}", exc_info=True)
+            self.logger.error(f"向量检索失败: {e}", exc_info=True)
             return ""
     
     def _build_search_queries(self, question: str, intent_analysis: Dict[str, Any]) -> List[str]:
@@ -412,33 +344,33 @@ class CodeQAService:
         Returns:
             str: Neo4j上下文
         """
-        logger.info("开始从Neo4j获取上下文...")
+        self.logger.info("开始从Neo4j获取上下文...")
         
-        if not self.graph_store:
-            logger.warning("Neo4j图存储未初始化，跳过Neo4j查询")
+        if not self.context_builder.graph_store:
+            self.logger.warning("Neo4j图存储未初始化，跳过Neo4j查询")
             return ""
         
         functions = intent_analysis.get("functions", [])
-        logger.info(f"从意图分析中提取的函数列表: {functions}")
+        self.logger.info(f"从意图分析中提取的函数列表: {functions}")
         
         if not functions:
-            logger.info("没有检测到函数，跳过Neo4j查询")
+            self.logger.info("没有检测到函数，跳过Neo4j查询")
             return ""
         
         context_parts = []
         
         # 获取意图分析识别的函数信息
         for func_name in functions:
-            logger.info(f"正在从Neo4j查询函数: {func_name}")
+            self.logger.info(f"正在从Neo4j查询函数: {func_name}")
             func_info = self._get_function_context(func_name)
             if func_info:
-                logger.info(f"成功从Neo4j获取函数 {func_name} 的信息，长度: {len(func_info)} 字符")
+                self.logger.info(f"成功从Neo4j获取函数 {func_name} 的信息，长度: {len(func_info)} 字符")
                 context_parts.append(f"### 函数: {func_name}\n{func_info}")
             else:
-                logger.warning(f"未能从Neo4j获取函数 {func_name} 的信息")
+                self.logger.warning(f"未能从Neo4j获取函数 {func_name} 的信息")
         
         result = "\n\n".join(context_parts)
-        logger.info(f"Neo4j上下文构建完成，总长度: {len(result)} 字符")
+        self.logger.info(f"Neo4j上下文构建完成，总长度: {len(result)} 字符")
         return result
     
     def _get_call_relationship_context(self, function_names: List[str]) -> str:
@@ -450,7 +382,7 @@ class CodeQAService:
         Returns:
             str: 调用关系上下文
         """
-        if not self.graph_store or not function_names:
+        if not self.context_builder.graph_store or not function_names:
             return ""
         
         context_parts = []
@@ -458,8 +390,8 @@ class CodeQAService:
         for func_name in function_names:
             try:
                 # 查询调用关系
-                callers = self.graph_store.query_function_callers(func_name)
-                callees = self.graph_store.query_function_calls(func_name)
+                callers = self.context_builder.graph_store.query_function_callers(func_name)
+                callees = self.context_builder.graph_store.query_function_calls(func_name)
                 
                 if callers or callees:
                     context_part = f"### {func_name} 调用关系\n"
@@ -475,7 +407,7 @@ class CodeQAService:
                     context_parts.append(context_part)
                     
             except Exception as e:
-                logger.warning(f"查询函数 {func_name} 的调用关系失败: {e}")
+                self.logger.warning(f"查询函数 {func_name} 的调用关系失败: {e}")
         
         return "\n\n".join(context_parts)
     
@@ -488,26 +420,26 @@ class CodeQAService:
         Returns:
             str: 函数上下文
         """
-        logger.info(f"开始获取函数 {function_name} 的上下文...")
+        self.logger.info(f"开始获取函数 {function_name} 的上下文...")
         
-        if not self.graph_store:
-            logger.warning("Neo4j图存储未初始化")
+        if not self.context_builder.graph_store:
+            self.logger.warning("Neo4j图存储未初始化")
             return ""
         
         try:
-            logger.info(f"调用Neo4j查询函数代码: {function_name}")
+            self.logger.info(f"调用Neo4j查询函数代码: {function_name}")
             # 从Neo4j获取函数代码
-            function_code = self.graph_store.get_function_code(function_name)
+            function_code = self.context_builder.graph_store.get_function_code(function_name)
             
             if function_code:
-                logger.info(f"成功获取函数 {function_name} 的代码，长度: {len(function_code)} 字符")
+                self.logger.info(f"成功获取函数 {function_name} 的代码，长度: {len(function_code)} 字符")
                 return f"```c\n{function_code}\n```"
             else:
-                logger.warning(f"函数 '{function_name}' 未找到")
+                self.logger.warning(f"函数 '{function_name}' 未找到")
                 return ""
                 
         except Exception as e:
-            logger.error(f"获取函数 {function_name} 上下文失败: {e}", exc_info=True)
+            self.logger.error(f"获取函数 {function_name} 上下文失败: {e}", exc_info=True)
             return ""
     
     def _get_file_context(self, file_path: str) -> str:
@@ -524,7 +456,7 @@ class CodeQAService:
             # 暂时返回空字符串
             return ""
         except Exception as e:
-            logger.error(f"获取文件 {file_path} 上下文失败: {e}")
+            self.logger.error(f"获取文件 {file_path} 上下文失败: {e}")
             return ""
     
     def _generate_answer(self, question: str, code_context: str, intent_analysis: Dict[str, Any]) -> str:
@@ -566,7 +498,7 @@ class CodeQAService:
             return response.content if response and response.content else "抱歉，无法生成回答。"
             
         except Exception as e:
-            logger.error(f"生成回答失败: {e}")
+            self.logger.error(f"生成回答失败: {e}")
             return f"生成回答时出错: {str(e)}"
     
     def _build_qa_system_prompt(self, intent_analysis: Dict[str, Any]) -> str:

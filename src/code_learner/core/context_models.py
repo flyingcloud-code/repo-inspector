@@ -5,71 +5,60 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Literal
+from typing import Dict, Any, List
 from enum import Enum
 
 
-class SourceType(Enum):
-    """检索源类型枚举"""
-    VECTOR = "vector"
-    CALL_GRAPH = "call_graph"
-    DEPENDENCY = "dependency"
+class SourceType(str, Enum):
+    """The source of the retrieved context."""
+    VECTOR = "vector_search"
+    GRAPH_FUNCTION_DEFINITION = "graph_function_definition"
+    GRAPH_CALLERS = "graph_callers"
+    GRAPH_CALLEES = "graph_callees"
+    GRAPH_DEPENDENCIES = "graph_dependencies"
+    UNKNOWN = "unknown"
 
-
-class IntentType(Enum):
-    """用户意图类型枚举"""
-    FUNCTION_QUERY = "function_query"  # 函数查询
-    FILE_QUERY = "file_query"  # 文件查询
-    CONCEPT_QUERY = "concept_query"  # 概念查询
-    CALL_RELATIONSHIP = "call_relationship"  # 调用关系查询
-    DEPENDENCY_QUERY = "dependency_query"  # 依赖关系查询
-    GENERAL_QUESTION = "general_question"  # 一般问题
+class IntentType(str, Enum):
+    """The type of user intent."""
+    GENERAL_QUESTION = "general_question"
+    EXPLAIN_CODE = "explain_code"
+    FIND_USAGE = "find_usage"
+    FIND_DEFINITION = "find_definition"
+    FIND_DEPENDENCIES = "find_dependencies"
 
 
 @dataclass
 class ContextItem:
-    """统一的上下文项数据结构
+    """
+    A standardized data structure for a single piece of context
+    retrieved from any source (vector DB, graph DB, etc.).
     
-    用于表示从不同检索源获取的上下文信息，
-    支持统一的重排序和处理流程。
+    This ensures that data from different retrievers has a consistent
+    shape, making it easy for downstream components like the Reranker
+    to process them.
     """
     content: str
-    source_type: SourceType
-    relevance_score: float
+    source: str  # e.g., "vector_search", "graph_retrieval_callers"
+    score: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
     
-    def __post_init__(self):
-        """数据验证"""
-        if not isinstance(self.source_type, SourceType):
-            if isinstance(self.source_type, str):
-                self.source_type = SourceType(self.source_type)
-            else:
-                raise ValueError(f"Invalid source_type: {self.source_type}")
-        
-        if not 0.0 <= self.relevance_score <= 1.0:
-            raise ValueError(f"relevance_score must be between 0.0 and 1.0, got {self.relevance_score}")
-    
-    def to_rerank_format(self, max_length: int = 200) -> str:
-        """转换为重排序输入格式
-        
-        Args:
-            max_length: 内容的最大长度
-            
-        Returns:
-            格式化的字符串，用于LLM重排序
+    def to_rerank_format(self) -> str:
         """
-        truncated_content = self.content[:max_length]
-        if len(self.content) > max_length:
-            truncated_content += "..."
-        
-        return f"[{self.source_type.value.upper()}] {truncated_content}"
+        Converts the context item into a string format suitable for
+        the LLM Reranker prompt.
+
+        The format is designed to be concise and informative for the LLM.
+        """
+        # Truncate content for brevity in the rerank prompt
+        truncated_content = (self.content[:250] + '...') if len(self.content) > 250 else self.content
+        return f"[Source: {self.source}, Score: {self.score:.2f}]\n{truncated_content}"
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
         return {
             "content": self.content,
-            "source_type": self.source_type.value,
-            "relevance_score": self.relevance_score,
+            "source": self.source,
+            "score": self.score,
             "metadata": self.metadata
         }
     
@@ -78,8 +67,8 @@ class ContextItem:
         """从字典创建ContextItem实例"""
         return cls(
             content=data["content"],
-            source_type=SourceType(data["source_type"]),
-            relevance_score=data["relevance_score"],
+            source=data["source"],
+            score=data["score"],
             metadata=data.get("metadata", {})
         )
 
@@ -151,7 +140,7 @@ class RetrievalResult:
     
     def filter_by_score(self, min_score: float) -> "RetrievalResult":
         """按相关性分数过滤结果"""
-        filtered_items = [item for item in self.items if item.relevance_score >= min_score]
+        filtered_items = [item for item in self.items if item.score >= min_score]
         return RetrievalResult(
             items=filtered_items,
             source_type=self.source_type,

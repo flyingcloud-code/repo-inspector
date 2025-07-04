@@ -265,7 +265,7 @@ class Neo4jGraphStore(IGraphStore):
             ]
             
             tx.run(function_creation_query, functions=functions_data, file_path=file_path, project_id=self.project_id)
-
+            
         # 批量创建函数调用关系
         if parsed_code.call_relationships:
             logger.info(f"🔍 [DEBUG] 发现 {len(parsed_code.call_relationships)} 个函数调用关系")
@@ -304,8 +304,8 @@ class Neo4jGraphStore(IGraphStore):
             UNWIND $calls AS call
             OPTIONAL MATCH (callee:Function {name: call.callee_name, project_id: $project_id})
             RETURN call.callee_name AS callee_name, count(callee) AS callee_found
-            """
-            
+                """
+                
             callee_result = tx.run(callee_check_query, {
                 'calls': calls_data,
                 'project_id': self.project_id
@@ -1617,18 +1617,18 @@ class Neo4jGraphStore(IGraphStore):
                     logger.warning(f"删除旧约束时出错（可能它们不存在，可忽略）: {e}")
                 
                 # 创建函数节点的唯一约束 (项目隔离)
-                session.run("""
+                    session.run("""
                     CREATE CONSTRAINT function_unique IF NOT EXISTS
-                    FOR (f:Function)
-                    REQUIRE (f.name, f.file_path, f.project_id) IS UNIQUE
-                """)
+                        FOR (f:Function)
+                        REQUIRE (f.name, f.file_path, f.project_id) IS UNIQUE
+                    """)
                 
                 # 创建文件节点的唯一约束 (项目隔离)
-                session.run("""
+                    session.run("""
                     CREATE CONSTRAINT file_unique IF NOT EXISTS
-                    FOR (f:File)
-                    REQUIRE (f.path, f.project_id) IS UNIQUE
-                """)
+                        FOR (f:File)
+                        REQUIRE (f.path, f.project_id) IS UNIQUE
+                    """)
                 
                 # 创建模块节点的唯一约束 (项目隔离)
                 session.run("""
@@ -2270,3 +2270,51 @@ class Neo4jGraphStore(IGraphStore):
         pass
 
     # ... rest of the existing code ... 
+
+    def get_all_functions(self) -> List[Dict[str, Any]]:
+        """获取项目中的所有函数信息"""
+        query = """
+        MATCH (f:Function)
+        WHERE f.project_id = $project_id
+        RETURN f
+        """
+        results = self.run_query(query, {"project_id": self.project_id})
+        functions = [dict(record["f"]) for record in results]
+        return functions
+
+    def get_function_details(self, function_name: str, file_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """获取特定函数的详细信息"""
+        query = """
+        MATCH (f:Function {file_path: $file_path, project_id: $project_id})
+        RETURN f
+        """
+        results = self.run_query(query, {"file_path": file_path, "project_id": self.project_id})
+        # Convert Node object to a plain dict to avoid issues with dataclass constructor
+        functions = [dict(record["f"]) for record in results]
+        return functions
+
+    def get_function_by_name(self, function_name: str) -> List[Dict[str, Any]]:
+        """根据函数名模糊搜索函数"""
+        query = "MATCH (f:Function {project_id: $project_id}) WHERE f.name CONTAINS $name RETURN f"
+        results = self.run_query(query, {"name": function_name, "project_id": self.project_id})
+        return [dict(record["f"]) for record in results]
+
+    def get_functions_without_docstrings(self) -> List[Dict[str, Any]]:
+        """获取所有缺少文档字符串的函数"""
+        query = """
+        MATCH (f:Function)
+        WHERE f.project_id = $project_id AND f.docstring IS NULL
+        RETURN f
+        """
+        results = self.run_query(query, {"project_id": self.project_id})
+        return [dict(record["f"]) for record in results]
+
+    def update_function_docstring(self, function_name: str, file_path: str, docstring: str) -> bool:
+        """更新函数的文档字符串"""
+        query = """
+        MATCH (f:Function {file_path: $file_path, project_id: $project_id})
+        SET f.docstring = $docstring
+        RETURN f
+        """
+        results = self.run_query(query, {"file_path": file_path, "project_id": self.project_id, "docstring": docstring})
+        return bool(results)

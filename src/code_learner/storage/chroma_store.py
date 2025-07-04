@@ -541,3 +541,261 @@ class ChromaVectorStore(IVectorStore):
         # 在实际使用时，应该由上层服务提供嵌入功能
         logger.warning("store_documentation_embeddings方法需要嵌入引擎，请使用上层服务的存储功能")
         return True
+
+    def is_available(self) -> bool:
+        """检查ChromaDB是否可用"""
+        try:
+            return self.client is not None and self.client.heartbeat() > 0
+        except Exception:
+            return False
+    
+    # 项目管理方法
+    def create_project(self, project_id: str) -> bool:
+        """创建新项目
+        
+        Args:
+            project_id: 项目ID
+            
+        Returns:
+            bool: 创建是否成功
+        """
+        if not self.client:
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
+        
+        try:
+            logger.info(f"🆕 创建项目: {project_id}")
+            
+            # 创建项目特定的默认集合
+            collection_name = f"{project_id}_code_embeddings"
+            
+            # 检查集合是否已存在
+            existing_collections = self.client.list_collections()
+            existing_names = [c.name for c in existing_collections]
+            
+            if collection_name in existing_names:
+                logger.info(f"📚 项目 '{project_id}' 的集合已存在")
+                return True
+            
+            # 创建新集合
+            metadata = {
+                "hnsw:space": "cosine",
+                "description": f"Code embeddings for project: {project_id}",
+                "project_id": project_id,
+                "created_by": "IndependentCodeEmbedder"
+            }
+            
+            collection = self.client.create_collection(
+                name=collection_name,
+                metadata=metadata
+            )
+            
+            self.collections[collection_name] = collection
+            logger.info(f"✅ 项目 '{project_id}' 创建成功")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 创建项目失败 '{project_id}': {e}")
+            raise DatabaseConnectionError("chromadb", f"Failed to create project '{project_id}': {str(e)}")
+    
+    def delete_project(self, project_id: str) -> bool:
+        """删除项目及其所有数据
+        
+        Args:
+            project_id: 项目ID
+            
+        Returns:
+            bool: 删除是否成功
+        """
+        if not self.client:
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
+        
+        try:
+            logger.info(f"🗑️ 删除项目: {project_id}")
+            
+            # 获取所有属于该项目的集合
+            all_collections = self.client.list_collections()
+            project_collections = [c.name for c in all_collections if c.name.startswith(f"{project_id}_")]
+            
+            if not project_collections:
+                logger.info(f"项目 '{project_id}' 不存在或已被删除")
+                return True
+            
+            # 删除所有项目集合
+            deleted_count = 0
+            for collection_name in project_collections:
+                try:
+                    self.client.delete_collection(collection_name)
+                    if collection_name in self.collections:
+                        del self.collections[collection_name]
+                    deleted_count += 1
+                    logger.info(f"✅ 删除集合: {collection_name}")
+                except Exception as e:
+                    logger.error(f"❌ 删除集合失败 '{collection_name}': {e}")
+            
+            logger.info(f"✅ 项目 '{project_id}' 删除完成，共删除 {deleted_count} 个集合")
+            return deleted_count > 0
+            
+        except Exception as e:
+            logger.error(f"❌ 删除项目失败 '{project_id}': {e}")
+            raise DatabaseConnectionError("chromadb", f"Failed to delete project '{project_id}': {str(e)}")
+    
+    def cleanup_project(self, project_id: str) -> bool:
+        """清理项目数据（清空但不删除集合）
+        
+        Args:
+            project_id: 项目ID
+            
+        Returns:
+            bool: 清理是否成功
+        """
+        if not self.client:
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
+        
+        try:
+            logger.info(f"🧹 清理项目数据: {project_id}")
+            
+            # 获取所有属于该项目的集合
+            all_collections = self.client.list_collections()
+            project_collections = [c for c in all_collections if c.name.startswith(f"{project_id}_")]
+            
+            if not project_collections:
+                logger.info(f"项目 '{project_id}' 不存在")
+                return True
+            
+            # 清理所有项目集合的数据
+            cleaned_count = 0
+            total_deleted = 0
+            
+            for collection in project_collections:
+                try:
+                    # 获取集合中的所有文档ID
+                    results = collection.get()
+                    if results and 'ids' in results and results['ids']:
+                        # 批量删除所有文档
+                        collection.delete(ids=results['ids'])
+                        total_deleted += len(results['ids'])
+                        logger.info(f"✅ 清理集合 '{collection.name}': 删除 {len(results['ids'])} 个文档")
+                    else:
+                        logger.info(f"📚 集合 '{collection.name}' 已为空")
+                    
+                    cleaned_count += 1
+                    
+                except Exception as e:
+                    logger.error(f"❌ 清理集合失败 '{collection.name}': {e}")
+            
+            logger.info(f"✅ 项目 '{project_id}' 清理完成，共清理 {cleaned_count} 个集合，删除 {total_deleted} 个文档")
+            return cleaned_count > 0
+            
+        except Exception as e:
+            logger.error(f"❌ 清理项目失败 '{project_id}': {e}")
+            raise DatabaseConnectionError("chromadb", f"Failed to cleanup project '{project_id}': {str(e)}")
+    
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """列出所有项目
+        
+        Returns:
+            List[Dict[str, Any]]: 项目信息列表
+        """
+        if not self.client:
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
+        
+        try:
+            logger.info("📋 列出所有项目")
+            
+            # 获取所有集合
+            all_collections = self.client.list_collections()
+            
+            # 按项目ID分组
+            projects = {}
+            for collection in all_collections:
+                # 解析项目ID（假设格式为 project_id_collection_name）
+                if '_' in collection.name:
+                    parts = collection.name.split('_', 1)
+                    if len(parts) >= 2:
+                        project_id = parts[0]
+                        if project_id not in projects:
+                            projects[project_id] = {
+                                'project_id': project_id,
+                                'collections': [],
+                                'total_documents': 0
+                            }
+                        
+                        # 获取集合文档数量
+                        try:
+                            count = collection.count()
+                            collection_info = {
+                                'name': collection.name,
+                                'document_count': count,
+                                'metadata': collection.metadata
+                            }
+                            projects[project_id]['collections'].append(collection_info)
+                            projects[project_id]['total_documents'] += count
+                        except Exception as e:
+                            logger.warning(f"获取集合 '{collection.name}' 信息失败: {e}")
+            
+            project_list = list(projects.values())
+            logger.info(f"✅ 找到 {len(project_list)} 个项目")
+            
+            return project_list
+            
+        except Exception as e:
+            logger.error(f"❌ 列出项目失败: {e}")
+            raise DatabaseConnectionError("chromadb", f"Failed to list projects: {str(e)}")
+    
+    def get_project_info(self, project_id: str) -> Dict[str, Any]:
+        """获取项目详细信息
+        
+        Args:
+            project_id: 项目ID
+            
+        Returns:
+            Dict[str, Any]: 项目信息
+        """
+        if not self.client:
+            raise DatabaseConnectionError("chromadb", "Chroma客户端未初始化")
+        
+        try:
+            logger.info(f"📊 获取项目信息: {project_id}")
+            
+            # 获取属于该项目的所有集合
+            all_collections = self.client.list_collections()
+            project_collections = [c for c in all_collections if c.name.startswith(f"{project_id}_")]
+            
+            if not project_collections:
+                return {
+                    'project_id': project_id,
+                    'exists': False,
+                    'collections': [],
+                    'total_documents': 0
+                }
+            
+            collections_info = []
+            total_documents = 0
+            
+            for collection in project_collections:
+                try:
+                    count = collection.count()
+                    collection_info = {
+                        'name': collection.name,
+                        'document_count': count,
+                        'metadata': collection.metadata
+                    }
+                    collections_info.append(collection_info)
+                    total_documents += count
+                except Exception as e:
+                    logger.warning(f"获取集合 '{collection.name}' 信息失败: {e}")
+            
+            project_info = {
+                'project_id': project_id,
+                'exists': True,
+                'collections': collections_info,
+                'total_documents': total_documents,
+                'collection_count': len(collections_info)
+            }
+            
+            logger.info(f"✅ 项目 '{project_id}' 信息: {len(collections_info)} 个集合, {total_documents} 个文档")
+            return project_info
+            
+        except Exception as e:
+            logger.error(f"❌ 获取项目信息失败 '{project_id}': {e}")
+            raise DatabaseConnectionError("chromadb", f"Failed to get project info '{project_id}': {str(e)}")

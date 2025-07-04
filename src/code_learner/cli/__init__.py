@@ -4,14 +4,21 @@
 提供命令行界面与代码学习器交互
 """
 
-from .code_analyzer_cli import main as analyzer_main
-from .call_graph_cli import main as call_graph_main
-from .dependency_cli import main as dependency_main
-from .unified_cli import main as unified_main
+# This file makes the 'cli' directory a Python package.
+
+# Expose key CLI functions for easier access if needed
+from .status_commands import StatusCommands
+from .project_commands import ProjectCommands
+from .analyze_commands import AnalyzeCommands
+from .query_commands import QueryCommands
+from .call_graph_commands import CallGraphCommands
+from .dep_graph_commands import DepGraphCommands
 
 __all__ = [
-    'analyzer_main',
-    'call_graph_main',
-    'dependency_main',
-    'unified_main'
+    'StatusCommands',
+    'ProjectCommands',
+    'AnalyzeCommands',
+    'QueryCommands',
+    'CallGraphCommands',
+    'DepGraphCommands',
 ]
