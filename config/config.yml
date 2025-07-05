@@ -65,7 +65,7 @@ logging:
 retrieval:
   vector_store:
     top_k: 10 # 从向量存储中为每个子查询检索的文档数量
-  final_top_k: 5 # 经过重排序后最终提供给LLM的文档数量
+  final_top_k: 10 # 经过重排序后最终提供给LLM的文档数量
 
 # 性能配置
 performance:
